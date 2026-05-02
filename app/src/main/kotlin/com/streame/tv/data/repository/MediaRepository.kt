@@ -1333,12 +1333,14 @@ class MediaRepository @Inject constructor(
     }
 
     private suspend fun getHomeCategoriesInternal(): List<Category> = coroutineScope {
-        suspend fun fetchUpTo40(fetchPage: suspend (Int) -> TmdbListResponse): List<TmdbMediaItem> {
-            val first = runCatching { fetchPage(1) }.getOrNull() ?: return emptyList()
-            val firstItems = first.results
-            if (firstItems.size >= 40 || first.totalPages < 2) return firstItems.take(40)
-            val secondItems = runCatching { fetchPage(2) }.getOrNull()?.results.orEmpty()
-            return (firstItems + secondItems).distinctBy { it.id }.take(40)
+        suspend fun fetchUpTo40(fetchPage: suspend (Int) -> TmdbListResponse): Result<List<TmdbMediaItem>> {
+            return runCatching {
+                val first = fetchPage(1)
+                val firstItems = first.results
+                if (firstItems.size >= 40 || first.totalPages < 2) return@runCatching firstItems.take(40)
+                val secondItems = runCatching { fetchPage(2) }.getOrNull()?.results.orEmpty()
+                (firstItems + secondItems).distinctBy { it.id }.take(40)
+            }
         }
 
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -1377,32 +1379,47 @@ class MediaRepository @Inject constructor(
         // was noise per user feedback.
 
         val maxItemsPerCategory = 40
-        suspend fun safeItems(fetch: suspend () -> List<TmdbMediaItem>, mediaType: MediaType): List<MediaItem> {
-            return runCatching { fetch() }
-                .getOrElse { emptyList() }
+        suspend fun safeItems(fetch: suspend () -> Result<List<TmdbMediaItem>>, mediaType: MediaType): Pair<List<MediaItem>, Throwable?> {
+            val result = fetch()
+            val items = result.getOrNull().orEmpty()
                 .take(maxItemsPerCategory)
                 .map { it.toMediaItem(mediaType) }
+            return items to result.exceptionOrNull()
         }
+
+        val failures = mutableListOf<Throwable>()
+
+        val (moviesItems, moviesErr) = safeItems({ trendingMovies.await() }, MediaType.MOVIE)
+        val (tvItems, tvErr) = safeItems({ trendingTv.await() }, MediaType.TV)
+        val (animeItems, animeErr) = safeItems({ trendingAnime.await() }, MediaType.TV)
+        moviesErr?.let { failures.add(it) }
+        tvErr?.let { failures.add(it) }
+        animeErr?.let { failures.add(it) }
 
         val categories = listOf(
             Category(
                 id = "trending_movies",
                 title = "Trending Movies",
-                items = safeItems({ trendingMovies.await() }, MediaType.MOVIE)
+                items = moviesItems
             ),
             Category(
                 id = "trending_tv",
                 title = "Trending Series",
-                items = safeItems({ trendingTv.await() }, MediaType.TV)
+                items = tvItems
             ),
             Category(
                 id = "trending_anime",
                 title = "Trending Anime",
-                items = safeItems({ trendingAnime.await() }, MediaType.TV)
+                items = animeItems
             )
         )
         val nonEmpty = categories.filter { it.items.isNotEmpty() }
         nonEmpty.forEach { cacheItems(it.items) }
+
+        if (nonEmpty.isEmpty() && failures.isNotEmpty()) {
+            throw failures.first()
+        }
+
         nonEmpty
     }
 

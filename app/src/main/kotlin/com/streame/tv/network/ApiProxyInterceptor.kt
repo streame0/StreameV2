@@ -7,70 +7,22 @@ import okhttp3.Request
 import okhttp3.Response
 
 /**
- * Intercepts API calls to TMDB and Trakt and routes them through Supabase Edge Functions.
- * This keeps API keys secure on the server - they never exist in the app.
+ * Intercepts Trakt API calls and routes them through Supabase Edge Functions.
+ * TMDB calls go directly — the API key is passed as a query parameter by Retrofit.
  */
 class ApiProxyInterceptor : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
-        val originalUrl = originalRequest.url
-
-        val host = originalUrl.host
+        val host = originalRequest.url.host
 
         return when {
-            host.contains("themoviedb.org") -> {
-                // Route TMDB requests through proxy
-                val proxyRequest = rewriteForTmdbProxy(originalRequest)
-                chain.proceed(proxyRequest)
-            }
-            host.contains("image.tmdb.org") -> {
-                // Route TMDB image CDN requests through proxy
-                val proxyRequest = rewriteForTmdbImageProxy(originalRequest)
-                chain.proceed(proxyRequest)
-            }
             host.contains("trakt.tv") -> {
-                // Route Trakt requests through proxy
                 val proxyRequest = rewriteForTraktProxy(originalRequest)
                 chain.proceed(proxyRequest)
             }
-            else -> {
-                // Pass through other requests unchanged
-                chain.proceed(originalRequest)
-            }
+            else -> chain.proceed(originalRequest)
         }
-    }
-
-    private fun rewriteForTmdbProxy(originalRequest: Request): Request {
-        val originalUrl = originalRequest.url
-
-        // Extract the path and remove /3 prefix (proxy adds it)
-        // e.g., /3/trending/movie/day -> /trending/movie/day
-        var path = originalUrl.encodedPath
-        if (path.startsWith("/3/")) {
-            path = path.removePrefix("/3")
-        }
-
-        // Build proxy URL with path parameter
-        val proxyUrlBuilder = Constants.TMDB_PROXY_URL.toHttpUrl().newBuilder()
-            .addQueryParameter("path", path)
-
-        // Forward all original query parameters except api_key
-        for (i in 0 until originalUrl.querySize) {
-            val name = originalUrl.queryParameterName(i)
-            if (name != "api_key") {
-                val value = originalUrl.queryParameterValue(i)
-                if (value != null) {
-                    proxyUrlBuilder.addQueryParameter(name, value)
-                }
-            }
-        }
-
-        return originalRequest.newBuilder()
-            .url(proxyUrlBuilder.build())
-            .header("apikey", Constants.SUPABASE_ANON_KEY)
-            .header("Authorization", "Bearer ${Constants.SUPABASE_ANON_KEY}")
-            .build()
     }
 
     private fun rewriteForTraktProxy(originalRequest: Request): Request {
@@ -112,22 +64,5 @@ class ApiProxyInterceptor : Interceptor {
         requestBuilder.removeHeader("trakt-api-version")
 
         return requestBuilder.build()
-    }
-
-    private fun rewriteForTmdbImageProxy(originalRequest: Request): Request {
-        val originalUrl = originalRequest.url
-
-        // image.tmdb.org paths look like: /t/p/w780/abc.jpg
-        val path = originalUrl.encodedPath
-
-        val proxyUrl = Constants.TMDB_IMAGE_PROXY_URL.toHttpUrl().newBuilder()
-            .addQueryParameter("path", path)
-            .build()
-
-        return originalRequest.newBuilder()
-            .url(proxyUrl)
-            .header("apikey", Constants.SUPABASE_ANON_KEY)
-            .header("Authorization", "Bearer ${Constants.SUPABASE_ANON_KEY}")
-            .build()
     }
 }

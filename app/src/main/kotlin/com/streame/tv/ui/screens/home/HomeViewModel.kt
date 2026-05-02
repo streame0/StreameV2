@@ -1167,9 +1167,11 @@ class HomeViewModel @Inject constructor(
                 }
 
                 var categories = withContext(networkDispatcher) {
-                    val baseCategories = runCatching {
+                    val baseCategoriesResult = runCatching {
                         mediaRepository.getHomeCategories()
-                    }.getOrElse { emptyList() }
+                    }
+                    val baseCategories = baseCategoriesResult.getOrElse { emptyList() }
+                    val baseCategoriesError = baseCategoriesResult.exceptionOrNull()
 
                     val baseById = LinkedHashMap<String, Category>().apply {
                         currentBaseCategories.forEach { put(it.id, it) }
@@ -1347,6 +1349,9 @@ class HomeViewModel @Inject constructor(
                         ) return@mapNotNull null
                         cat.withTop10CapIfNeeded()
                     }.toMutableList()
+                    if (resolved.isEmpty() && baseCategoriesError != null) {
+                        throw baseCategoriesError
+                    }
                     resolved
                 }
                 val collectionRows = withContext(networkDispatcher) {

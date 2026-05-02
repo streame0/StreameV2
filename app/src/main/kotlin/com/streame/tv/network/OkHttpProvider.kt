@@ -162,9 +162,6 @@ object OkHttpProvider {
         }
 
         val builder = OkHttpClient.Builder()
-            // Route TMDB/Trakt calls through Supabase edge function proxies.
-            // This fixes devices/networks where direct access to TMDB/Trakt is blocked.
-            .addInterceptor(ApiProxyInterceptor())
             .addInterceptor(loggingInterceptor)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -304,8 +301,6 @@ object OkHttpProvider {
         // The image CDN (image.tmdb.org) is a fast static-asset CDN that should respond
         // in <500ms; anything longer is a network issue that retrying later will fix.
         return OkHttpClient.Builder()
-            // Route TMDB image CDN calls through Supabase proxy when image.tmdb.org is blocked.
-            .addInterceptor(ApiProxyInterceptor())
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
