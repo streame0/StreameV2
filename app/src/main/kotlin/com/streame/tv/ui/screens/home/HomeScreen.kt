@@ -1000,10 +1000,18 @@ fun HomeScreen(
                         color = TextSecondary
                     )
                     Spacer(modifier = Modifier.height(24.dp))
-                    androidx.tv.material3.Button(
-                        onClick = { viewModel.refresh() }
-                    ) {
-                        Text(stringResource(R.string.retry))
+                    if (isMobile) {
+                        androidx.compose.material3.Button(
+                            onClick = { viewModel.refresh() }
+                        ) {
+                            Text(stringResource(R.string.retry))
+                        }
+                    } else {
+                        androidx.tv.material3.Button(
+                            onClick = { viewModel.refresh() }
+                        ) {
+                            Text(stringResource(R.string.retry))
+                        }
                     }
                 }
             }
