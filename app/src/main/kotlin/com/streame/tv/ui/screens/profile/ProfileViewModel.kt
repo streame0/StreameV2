@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.model.Profile
 import com.streame.tv.data.model.ProfileColors
-import com.streame.tv.data.repository.CloudSyncRepository
 import com.streame.tv.data.repository.ProfileManager
 import com.streame.tv.data.repository.ProfileRepository
 import com.streame.tv.data.repository.TraktRepository
@@ -55,7 +54,6 @@ class ProfileViewModel @Inject constructor(
     private val traktRepository: TraktRepository,
     private val watchHistoryRepository: WatchHistoryRepository,
     private val watchlistRepository: WatchlistRepository,
-    private val cloudSyncRepository: CloudSyncRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProfileUiState())
@@ -146,32 +144,6 @@ class ProfileViewModel @Inject constructor(
                     profileRepository.setActiveProfile(profile.id)
                 }
 
-                // Pull cloud state before the profile screen is allowed to disappear.
-                // If this is launched in this ViewModel after navigation, the job can
-                // be cancelled and profile-scoped Trakt tokens never restore.
-                val restoreResult = withContext(Dispatchers.IO) {
-                    runCatching { cloudSyncRepository.pullFromCloud() }.getOrNull()
-                }
-                if (restoreResult != CloudSyncRepository.RestoreResult.FAILED &&
-                    profileRepository.getActiveProfileId() == profile.id
-                ) {
-                    viewModelScope.launch(Dispatchers.IO) {
-                        runCatching { cloudSyncRepository.pushToCloud() }
-                    }
-                }
-
-                viewModelScope.launch(Dispatchers.IO) {
-                    delay(1_000L)
-                    if (profileRepository.getActiveProfileId() != profile.id) return@launch
-                    runCatching { cloudSyncRepository.pullFromCloud() }
-                }
-
-                viewModelScope.launch(Dispatchers.IO) {
-                    delay(45_000L)
-                    if (profileRepository.getActiveProfileId() != profile.id) return@launch
-                    runCatching {
-                    }
-                }
             } finally {
                 _uiState.value = _uiState.value.copy(isSwitchingProfile = false)
             }
@@ -230,7 +202,6 @@ class ProfileViewModel @Inject constructor(
             )
             _uiState.value = _uiState.value.copy(showAddDialog = false)
             showToast("Profile created successfully", ToastType.SUCCESS)
-            runCatching { cloudSyncRepository.pushToCloud() }
         }
     }
 
@@ -276,7 +247,6 @@ class ProfileViewModel @Inject constructor(
             )
             _uiState.value = _uiState.value.copy(editingProfile = null)
             showToast("Profile updated", ToastType.SUCCESS)
-            runCatching { cloudSyncRepository.pushToCloud() }
         }
     }
 
@@ -316,7 +286,6 @@ class ProfileViewModel @Inject constructor(
                 profileManager.setCurrentProfileId("default")
                 profileManager.setCurrentProfileName("default")
             }
-            runCatching { cloudSyncRepository.pushToCloud() }
         }
     }
 
@@ -397,7 +366,6 @@ class ProfileViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(editingProfile = updatedProfile)
             hidePinDialog()
             showToast("Profile PIN set successfully", ToastType.SUCCESS)
-            runCatching { cloudSyncRepository.pushToCloud() }
         }
     }
 
@@ -407,7 +375,6 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch {
             profileRepository.updateProfile(updatedProfile)
             _uiState.value = _uiState.value.copy(editingProfile = updatedProfile)
-            runCatching { cloudSyncRepository.pushToCloud() }
         }
     }
 }

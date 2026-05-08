@@ -95,7 +95,6 @@ fun AppTopBar(
     profile: Profile? = null,
     profileCount: Int = 1,
     clockFormat: String = "24h",
-    syncStatus: com.streame.tv.data.repository.CloudSyncStatus = com.streame.tv.data.repository.CloudSyncStatus.NOT_SIGNED_IN,
     modifier: Modifier = Modifier
 ) {
     // Always show the profile avatar when a profile exists — it's clickable

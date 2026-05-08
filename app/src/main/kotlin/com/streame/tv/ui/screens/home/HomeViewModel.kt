@@ -23,11 +23,9 @@ import com.streame.tv.data.repository.TraktRepository
 import com.streame.tv.data.repository.TraktSyncService
 import com.streame.tv.data.repository.ContinueWatchingItem
 import com.streame.tv.data.repository.CatalogRepository
-import com.streame.tv.data.repository.CloudSyncRepository
 import com.streame.tv.data.repository.LauncherContinueWatchingRepository
 import com.streame.tv.data.repository.ProfileManager
 import com.streame.tv.data.repository.StreamRepository
-import com.streame.tv.data.repository.CloudSyncStatus
 import com.streame.tv.data.repository.CollectionTemplateManifest
 import com.streame.tv.data.repository.WatchHistoryRepository
 import com.streame.tv.data.repository.WatchlistRepository
@@ -35,8 +33,10 @@ import com.streame.tv.util.Constants
 import com.streame.tv.util.DeviceType
 import com.streame.tv.util.LAST_APP_LANGUAGE_KEY
 import com.streame.tv.util.detectDeviceType
+import com.streame.tv.data.local.LocalHomeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -85,8 +85,6 @@ data class HomeUiState(
     val isHeroTransitioning: Boolean = false,
     val isAuthenticated: Boolean = false,
     val clockFormat: String = "24h",
-    // Cloud sync status for the indicator on the home top bar
-    val syncStatus: com.streame.tv.data.repository.CloudSyncStatus = com.streame.tv.data.repository.CloudSyncStatus.NOT_SIGNED_IN,
     // Toast
     val toastMessage: String? = null,
     val toastType: ToastType = ToastType.INFO
@@ -112,10 +110,10 @@ class HomeViewModel @Inject constructor(
     private val traktSyncService: TraktSyncService,
     private val watchHistoryRepository: WatchHistoryRepository,
     private val watchlistRepository: WatchlistRepository,
-    private val cloudSyncRepository: CloudSyncRepository,
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
-    private val realtimeSyncManager: com.streame.tv.data.repository.RealtimeSyncManager,
     private val profileManager: ProfileManager,
+    private val localHomeRepository: LocalHomeRepository,
+    private val networkMonitor: com.streame.tv.network.NetworkMonitor,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val imageLoader: ImageLoader by lazy(LazyThreadSafetyMode.NONE) {
@@ -145,6 +143,18 @@ class HomeViewModel @Inject constructor(
             "top10_movies_today",
             "top10_shows_today"
         )
+    }
+
+    // A2: Coroutine exception handler for centralized exception logging
+    private val viewModelExceptionHandler = CoroutineExceptionHandler { coroutineContext, throwable ->
+        val profileId = runCatching { profileManager.getProfileIdSync() }.getOrDefault("unknown")
+        val contextInfo = when {
+            coroutineContext[Job]?.let { it.key } == loadHomeJob?.let { it.key } -> "loadHomeData"
+            coroutineContext[Job]?.let { it.key } == cwFetchJob?.let { it.key } -> "continueWatchingFetch"
+            coroutineContext[Job]?.let { it.key } == refreshContinueWatchingJob?.let { it.key } -> "refreshContinueWatching"
+            else -> "unknown"
+        }
+        android.util.Log.e("HomeVM", "EXCEPTION: profileId=$profileId, requestId=$loadHomeRequestId, context=$contextInfo, error=${throwable.message}", throwable)
     }
 
     fun isCollectionItem(item: MediaItem): Boolean = item.status?.startsWith("collection:") == true
@@ -301,7 +311,11 @@ class HomeViewModel @Inject constructor(
         }.getOrDefault(emptyList())
     }
     // IO concurrency for network requests (logo fetches, catalog loads, etc.)
-    private val networkParallelism = if (isLowRamDevice) 1 else 2
+    // Actual TMDB API call rate is already bounded by per-call Semaphores (5-6);
+    // this dispatcher parallelism adds headroom for concurrent cache hits, image
+    // prefetches, and non-TMDB work. Was 2, which serialized too much on capable
+    // devices with 32-connection OkHttp pools.
+    private val networkParallelism = if (isLowRamDevice) 1 else 4
     private val networkDispatcher = Dispatchers.IO.limitedParallelism(networkParallelism)
     private var lastContinueWatchingItems: List<MediaItem> = emptyList()
     private var lastContinueWatchingUpdateMs: Long = 0L
@@ -332,6 +346,14 @@ class HomeViewModel @Inject constructor(
     private val HERO_DEBOUNCE_MS = 80L // Short debounce; focus idle is handled in HomeScreen
     private val startupCreatedAtMs = SystemClock.elapsedRealtime()
     private val startupSettleMs = if (isLowRamDevice) 5_000L else 4_000L
+
+    // A1: Timing instrumentation for performance measurement
+    private var firstContentDisplayedAtMs: Long = 0L
+    private var firstRowEmittedAtMs: Long = 0L
+    private var firstImageDisplayedAtMs: Long = 0L
+    private var coldStartToInitialContentMs: Long = 0L
+    private var initialContentToFirstRowMs: Long = 0L
+    private var firstRowToFirstImageMs: Long = 0L
 
     // Phase 6.2-6.3: Fast scroll detection
     private var lastFocusChangeTime = 0L
@@ -369,7 +391,7 @@ class HomeViewModel @Inject constructor(
     private val incrementalBackdropPrefetchItems = if (isLowRamDevice) 4 else 7
     private val initialCategoryItemCap = if (isLowRamDevice) 8 else 10
     private val categoryPageSize = if (isLowRamDevice) 8 else 10
-    private val initialMdblistCatalogCount = 1
+    private val initialMdblistCatalogCount = 4
     private val nearEndThreshold = 4
 
     // Track current focus for ahead-of-focus preloading
@@ -479,7 +501,7 @@ class HomeViewModel @Inject constructor(
         traktRepository.clearAllProfileCaches()
         watchlistRepository.clearWatchlistCache()
         watchHistoryRepository.clearProfileCaches()
-        _uiState.value = HomeUiState(syncStatus = _uiState.value.syncStatus)
+        _uiState.value = HomeUiState()
         activeRuntimeProfileId = profileId
     }
 
@@ -679,35 +701,8 @@ class HomeViewModel @Inject constructor(
             } catch (_: Exception) {}
         }
 
-        // Subscribe to realtime watch_history events so Continue Watching refreshes on
-        // this device within a few seconds of another device updating the shared
-        // Supabase watch_history table. Before this, mid-playback updates from device A
-        // were only visible on device B after a manual Home ON_RESUME or the 5-minute
-        // periodic sync — so switching devices mid-episode always showed the stale
-        // resume position. Fixes #91.
-        viewModelScope.launch {
-            realtimeSyncManager.watchHistoryEvents.collect {
-                refreshContinueWatchingOnly(force = true)
-                runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
-            }
-        }
+        // Realtime sync removed — no Supabase
 
-        // Reload home data when account_sync changes arrive from another device
-        // (catalogs, addons, settings pushed by TV/phone). This ensures the UI
-        // reflects the latest state without waiting for the next ON_RESUME.
-        viewModelScope.launch {
-            realtimeSyncManager.accountSyncEvents.collect {
-                loadHomeData()
-                runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
-            }
-        }
-
-        // Collect sync status so the UI can show a connection indicator.
-        viewModelScope.launch {
-            realtimeSyncManager.syncStatusFlow.collect { status ->
-                _uiState.value = _uiState.value.copy(syncStatus = status)
-            }
-        }
         // Restore logo URL cache from disk off the main thread. This used to run
         // synchronously during HomeViewModel init, which made the profile->home
         // transition much more likely to hitch or ANR on phones with larger caches.
@@ -732,16 +727,32 @@ class HomeViewModel @Inject constructor(
         // screen appears populated within 1 frame of launch — no skeleton loading
         // phase. loadHomeData() refreshes from TMDB in the background and silently
         // replaces the cached data when it arrives.
+        // Room is the single authoritative source; JSON file is fallback only if Room is empty.
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 applyContentLanguageFromPrefs()
-                val cachedCategories = loadCategoriesCache()
+                // B1: Try Room first (single authoritative source)
+                val roomCached = runCatching { localHomeRepository.getCachedCategories() }.getOrNull()
+                    ?: emptyList()
+                val cachedCategories = if (roomCached.isNotEmpty()) roomCached else loadCategoriesCache()
                 if (cachedCategories.isNotEmpty() && _uiState.value.categories.isEmpty()) {
                     val heroItem = chooseInitialHero(cachedCategories)
                     val heroKey = heroItem?.let { "${it.mediaType}_${it.id}" }
                     val heroLogo = heroKey?.let { getCachedLogo(it) }
                     withContext(Dispatchers.Main) {
                         if (_uiState.value.categories.isEmpty()) {
+                            // A1: Record timing when first content is displayed
+                            if (firstContentDisplayedAtMs == 0L) {
+                                firstContentDisplayedAtMs = SystemClock.elapsedRealtime()
+                                coldStartToInitialContentMs = firstContentDisplayedAtMs - startupCreatedAtMs
+                                android.util.Log.i("HomeVM", "TIMING: coldStartToInitialContent=${coldStartToInitialContentMs}ms")
+                            }
+                            // A1: Record timing when first non-empty row is emitted
+                            if (cachedCategories.any { it.items.isNotEmpty() } && firstRowEmittedAtMs == 0L) {
+                                firstRowEmittedAtMs = SystemClock.elapsedRealtime()
+                                initialContentToFirstRowMs = firstRowEmittedAtMs - firstContentDisplayedAtMs
+                                android.util.Log.i("HomeVM", "TIMING: initialContentToFirstRow=${initialContentToFirstRowMs}ms")
+                            }
                             _uiState.value = _uiState.value.copy(
                                 isLoading = false,
                                 isInitialLoad = false,
@@ -787,6 +798,12 @@ class HomeViewModel @Inject constructor(
                     withContext(Dispatchers.Main) {
                         if (rawFirstItem != null && _uiState.value.heroItem == null) {
                             if (heroLogo != null) {
+                                // A1: Record timing when first image (logo) is ready
+                                if (firstImageDisplayedAtMs == 0L) {
+                                    firstImageDisplayedAtMs = SystemClock.elapsedRealtime()
+                                    firstRowToFirstImageMs = firstImageDisplayedAtMs - firstRowEmittedAtMs
+                                    android.util.Log.i("HomeVM", "TIMING: firstRowToFirstImage=${firstRowToFirstImageMs}ms")
+                                }
                                 if (isStartupSettling()) {
                                     scheduleStartupImageWarmup(logoUrls = listOf(heroLogo))
                                 } else {
@@ -1065,16 +1082,44 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun loadHomeData() {
-        loadHomeJob?.cancel()
+        // Debounce: multiple callers (profile load, catalog observer, cloud pull)
+        // trigger this in quick succession during startup. Each call used to cancel
+        // the previous job, which killed in-flight TMDB proxy requests before they
+        // could complete (~1.8s each). Now we increment the request ID and let the
+        // running job check it after its debounce delay — rapid calls coalesce into
+        // a single actual load.
         val requestId = ++loadHomeRequestId
+        loadHomeJob?.cancel()
         loadHomeJob = viewModelScope.launch loadHome@{
-            // Skip delay - preloading now happens on profile focus for instant display
-            // Only add minimal delay if no preloaded data exists yet
-            if (!usedPreloadedData) {
-                delay(50) // Minimal delay for LaunchedEffect to potentially set preloaded data
-            }
+            // Debounce: wait briefly so rapid consecutive calls settle before we
+            // start any network work. The last caller wins (highest requestId).
+            delay(500)
             if (requestId != loadHomeRequestId) return@loadHome
             applyContentLanguageFromPrefs()
+
+            // Offline short-circuit: skip network fetch entirely when disconnected.
+            // Cached data (Room + disk) remains visible; the offline banner tells the user.
+            if (!networkMonitor.isConnected && _uiState.value.categories.isNotEmpty()) {
+                android.util.Log.i("HomeVM", "Offline — skipping network fetch, showing cached data")
+                _uiState.value = _uiState.value.copy(isLoading = false, isInitialLoad = false)
+                return@loadHome
+            }
+
+            // Room fallback: show cached categories immediately (local-first)
+            val cachedFromRoom = withContext(Dispatchers.IO) {
+                runCatching { localHomeRepository.getCachedCategories() }.getOrNull()
+            }
+            if (cachedFromRoom != null && cachedFromRoom.isNotEmpty() && _uiState.value.categories.isEmpty()) {
+                android.util.Log.w("HomeVM", "Showing ${cachedFromRoom.size} cached categories from Room")
+                _uiState.value = _uiState.value.copy(
+                    isLoading = true,
+                    isInitialLoad = false,
+                    categories = cachedFromRoom,
+                    heroItem = cachedFromRoom.firstOrNull()?.items?.firstOrNull { !it.isPlaceholder },
+                    heroLogoUrl = null,
+                    error = null
+                )
+            }
 
             try {
                 if (_uiState.value.categories.isEmpty()) {
@@ -1110,8 +1155,7 @@ class HomeViewModel @Inject constructor(
                 val savedCatalogs = withContext(networkDispatcher) {
                     runCatching {
                         streamRepository.removeCustomAddonsByUrl(
-                            CollectionTemplateManifest.autoInstalledAddonUrls() +
-                                listOf(MediaRepository.STREAMING_COLLECTION_ADDON_URL)
+                            CollectionTemplateManifest.autoInstalledAddonUrls()
                         )
                         val addons = streamRepository.installedAddons.first()
                         catalogRepository.syncAddonCatalogs(addons)
@@ -1172,6 +1216,7 @@ class HomeViewModel @Inject constructor(
                     }
                     val baseCategories = baseCategoriesResult.getOrElse { emptyList() }
                     val baseCategoriesError = baseCategoriesResult.exceptionOrNull()
+                    android.util.Log.w("HomeVM", "baseCategories: ${baseCategories.size} cats, ids=${baseCategories.map { it.id }}, error=$baseCategoriesError")
 
                     val baseById = LinkedHashMap<String, Category>().apply {
                         currentBaseCategories.forEach { put(it.id, it) }
@@ -1179,6 +1224,19 @@ class HomeViewModel @Inject constructor(
                     }
 
                     // Split preinstalled into TMDB-based and MDBList-based
+                    // Special handling for "favorite_tv": it has no TMDB source,
+                    // so baseById never contains it. Instead, populate it from
+                    // the user's watchlist (TV shows only).
+                    val favoriteTvItems = runCatching { watchlistRepository.getWatchlistItems() }
+                        .getOrDefault(emptyList())
+                        .filter { it.mediaType == MediaType.TV }
+                    if (favoriteTvItems.isNotEmpty()) {
+                        baseById["favorite_tv"] = Category(
+                            id = "favorite_tv",
+                            title = "Favorite TV",
+                            items = favoriteTvItems
+                        )
+                    }
                     val tmdbPreinstalled = savedCatalogs
                         .filter {
                             it.isPreinstalled &&
@@ -1268,7 +1326,7 @@ class HomeViewModel @Inject constructor(
                     // loadCustomCatalogsIncrementally which loaded them one-by-one and
                     // caused slow incremental insertion. This way everything appears in
                     // the single bulk categories set at line ~1250.
-                    val customSemaphore = kotlinx.coroutines.sync.Semaphore(if (isLowRamDevice) 1 else 2)
+                    val customSemaphore = kotlinx.coroutines.sync.Semaphore(if (isLowRamDevice) 1 else 4)
                     val freshCustomCategories = customCatalogConfigs.map { cfg ->
                         async(networkDispatcher) {
                             customSemaphore.withPermit {
@@ -1343,16 +1401,31 @@ class HomeViewModel @Inject constructor(
                             return@mapNotNull null
                         }
                         val cat = allById[cfg.id]
-                        if (cat == null || cat.items.isEmpty()) return@mapNotNull null
+                        if (cat == null) return@mapNotNull null
+                        // Don't drop rows with empty items — they may be deferred
+                        // catalogs still loading in the background. The deferred
+                        // loader will replace them with real data when ready.
+                        // Only skip truly empty non-deferred rows (no sourceUrl
+                        // and no items = dead config like favorite_tv with empty watchlist).
+                        if (cat.items.isEmpty() && cfg.sourceUrl.isNullOrBlank() && cfg.id != "favorite_tv") return@mapNotNull null
                         if (!cfg.isPreinstalled &&
                             cat.title.trim().lowercase(Locale.US) in serviceTitleBlocklist
                         ) return@mapNotNull null
                         cat.withTop10CapIfNeeded()
                     }.toMutableList()
+                    android.util.Log.w("HomeVM", "resolved: ${resolved.size} cats from ${savedCatalogs.size} savedCatalogs, allById keys=${allById.keys}")
                     if (resolved.isEmpty() && baseCategoriesError != null) {
                         throw baseCategoriesError
                     }
-                    resolved
+                    // Fallback: if catalog resolution dropped everything but TMDB
+                    // returned data, show the TMDB categories directly so the user
+                    // sees content instead of an empty screen.
+                    if (resolved.isEmpty() && baseCategories.isNotEmpty()) {
+                        android.util.Log.w("HomeVM", "FALLBACK: using ${baseCategories.size} baseCategories directly")
+                        baseCategories
+                    } else {
+                        resolved
+                    }
                 }
                 val collectionRows = withContext(networkDispatcher) {
                     val collectionConfigs = savedCatalogs.filter { cfg ->
@@ -1402,7 +1475,11 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                 }
-                if (requestId != loadHomeRequestId) return@loadHome
+                if (requestId != loadHomeRequestId) {
+                    android.util.Log.w("HomeVM", "STALE REQUEST — discarding ${categories.size} categories (requestId=$requestId vs loadHomeRequestId=$loadHomeRequestId)")
+                    return@loadHome
+                }
+                android.util.Log.w("HomeVM", "FINAL categories=${categories.size}, ids=${categories.map { it.id }}")
 
                 // CW resolution is decoupled from loadHomeData to prevent cancellation.
                 // loadHomeData() is called multiple times during startup (profile load,
@@ -1559,9 +1636,12 @@ class HomeViewModel @Inject constructor(
                 replaceCardLogoState(snapshotLogoCache())
                 refreshWatchedBadges()
 
-                // Persist the real categories to disk so the next app launch
-                // shows them immediately without waiting for TMDB API calls.
+                // B1: Persist categories - Room is the authoritative source,
+                // JSON file is fallback for edge cases.
                 viewModelScope.launch(Dispatchers.IO) {
+                    // Write to Room first (authoritative source)
+                    runCatching { localHomeRepository.cacheCategories(categories) }
+                    // Also write to JSON as backup
                     runCatching { persistCategoriesCache(categories) }
                 }
 
@@ -1716,8 +1796,8 @@ class HomeViewModel @Inject constructor(
             }
             publishMergedThrottled(force = true)
 
-            // Load custom catalogs in parallel (up to 3 concurrently) for faster appearance
-            val catalogSemaphore = kotlinx.coroutines.sync.Semaphore(if (isLowRamDevice) 2 else 3)
+            // Load custom catalogs in parallel (up to 4 concurrently) for faster appearance
+            val catalogSemaphore = kotlinx.coroutines.sync.Semaphore(if (isLowRamDevice) 2 else 4)
             val jobs = customCatalogs.map { catalog ->
                 async(networkDispatcher) {
                     catalogSemaphore.withPermit {
@@ -2028,46 +2108,6 @@ class HomeViewModel @Inject constructor(
                 if (isTraktAuthenticated) true else item.progress in 1..99
             }
             .take(Constants.MAX_CONTINUE_WATCHING)
-    }
-
-    /**
-     * Pull the full cloud state (addons, catalogs, settings, profiles) on ON_RESUME.
-     * This is the critical fix for the "addon added on phone but not on TV" symptom:
-     * when the TV comes back from background, the WebSocket may be dead, so we do
-     * an explicit pull to catch any account_sync_state changes that were missed.
-     * Throttled to at most once per 10 seconds to avoid excessive pulls on rapid
-     * activity transitions (e.g., player back → home → details → home).
-     */
-    @Volatile
-    private var lastCloudPullTimestamp = 0L
-    private val cloudPullThrottleMs = 10_000L
-
-    fun pullCloudStateOnResume() {
-        val now = System.currentTimeMillis()
-        if (now - lastCloudPullTimestamp < cloudPullThrottleMs) return
-        lastCloudPullTimestamp = now
-        viewModelScope.launch(Dispatchers.IO) {
-            // If a previous push failed (dirty flag), retry it now before pulling.
-            // This ensures the cloud has our latest state before we pull the other
-            // device's state on top of it — preventing stale overwrites.
-            if (cloudSyncRepository.isPushDirty) {
-                android.util.Log.i("HomeViewModel", "Retrying dirty push before pull")
-                runCatching { cloudSyncRepository.pushToCloud() }
-            }
-            val result = runCatching {
-                cloudSyncRepository.pullFromCloud()
-            }
-            result.onSuccess { restoreResult ->
-                if (restoreResult == CloudSyncRepository.RestoreResult.RESTORED) {
-                    // Cloud state was applied — reload home data so catalog changes,
-                    // addon changes, and settings from the other device take effect
-                    // immediately without waiting for the observeCatalogs flow.
-                    loadHomeData()
-                }
-            }.onFailure {
-                android.util.Log.w("HomeViewModel", "ON_RESUME cloud pull failed: ${it.message}")
-            }
-        }
     }
 
     fun refreshContinueWatchingOnly(force: Boolean = false) {
@@ -2910,7 +2950,6 @@ class HomeViewModel @Inject constructor(
                     }
                     watchlistRepository.addToWatchlist(item.mediaType, item.id, item)
                 }
-                runCatching { cloudSyncRepository.pushToCloud() }
                 _uiState.value = _uiState.value.copy(
                     toastMessage = if (isInWatchlist) "Removed from watchlist" else "Added to watchlist",
                     toastType = ToastType.SUCCESS
@@ -3014,10 +3053,6 @@ class HomeViewModel @Inject constructor(
                 }
                 runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                 // Push cloud snapshot so other devices see the watched-status change
-                // and the updated Continue Watching entry. Without this, the snapshot
-                // (localCW, localWatchedMovies, localWatchedEpisodes, dismissedCW)
-                // was never updated — only the Supabase watch_history table was.
-                runCatching { cloudSyncRepository.pushToCloud() }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     toastMessage = "Failed to update watched status",
@@ -3094,7 +3129,7 @@ class HomeViewModel @Inject constructor(
                                 durationSeconds = 1L,
                                 year = item.year
                             )
-                            // Also save to Supabase for cross-device sync
+                            // Also save progress locally
                             watchHistoryRepository.saveProgress(
                                 mediaType = MediaType.TV,
                                 tmdbId = item.id,
@@ -3121,7 +3156,6 @@ class HomeViewModel @Inject constructor(
                 }
                 runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                 // Push cloud snapshot so other devices see watched status + CW update
-                runCatching { cloudSyncRepository.pushToCloud() }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     toastMessage = "Failed to update watched status",
@@ -3150,7 +3184,6 @@ class HomeViewModel @Inject constructor(
                 traktRepository.deletePlaybackForContent(item.id, item.mediaType)
                 traktRepository.removeFromContinueWatchingCache(item.id, null, null)
                 traktRepository.dismissContinueWatching(item)
-                runCatching { cloudSyncRepository.pushToCloud() }
 
                 val updatedCategories = _uiState.value.categories.map { category ->
                     if (category.id == "continue_watching") {

@@ -12,21 +12,18 @@ interface TmdbApi {
     
     @GET("trending/movie/day")
     suspend fun getTrendingMovies(
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null,
         @Query("page") page: Int = 1
     ): TmdbListResponse
 
     @GET("trending/tv/day")
     suspend fun getTrendingTv(
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null,
         @Query("page") page: Int = 1
     ): TmdbListResponse
     
     @GET("discover/tv")
     suspend fun discoverTv(
-        @Query("api_key") apiKey: String,
         @Query("with_watch_providers") watchProviders: Int? = null,
         @Query("watch_region") watchRegion: String = "US",
         @Query("sort_by") sortBy: String = "popularity.desc",
@@ -44,7 +41,6 @@ interface TmdbApi {
 
     @GET("discover/movie")
     suspend fun discoverMovies(
-        @Query("api_key") apiKey: String,
         @Query("with_genres") genres: String? = null,
         @Query("with_crew") crew: String? = null,
         @Query("sort_by") sortBy: String = "popularity.desc",
@@ -63,14 +59,12 @@ interface TmdbApi {
     @GET("movie/{movie_id}")
     suspend fun getMovieDetails(
         @Path("movie_id") movieId: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbMovieDetails
     
     @GET("tv/{tv_id}")
     suspend fun getTvDetails(
         @Path("tv_id") tvId: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbTvDetails
     
@@ -78,7 +72,6 @@ interface TmdbApi {
     suspend fun getTvSeason(
         @Path("tv_id") tvId: Int,
         @Path("season_number") seasonNumber: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbSeasonDetails
     
@@ -86,7 +79,6 @@ interface TmdbApi {
     suspend fun getCredits(
         @Path("media_type") mediaType: String,
         @Path("id") id: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbCreditsResponse
     
@@ -94,7 +86,6 @@ interface TmdbApi {
     suspend fun getSimilar(
         @Path("media_type") mediaType: String,
         @Path("id") id: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbListResponse
 
@@ -102,60 +93,51 @@ interface TmdbApi {
     suspend fun getRecommendations(
         @Path("media_type") mediaType: String,
         @Path("id") id: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbListResponse
 
     @GET("{media_type}/{id}/images")
     suspend fun getImages(
         @Path("media_type") mediaType: String,
-        @Path("id") id: Int,
-        @Query("api_key") apiKey: String
+        @Path("id") id: Int
     ): TmdbImagesResponse
     
     @GET("{media_type}/{id}/videos")
     suspend fun getVideos(
         @Path("media_type") mediaType: String,
         @Path("id") id: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbVideosResponse
     
     @GET("person/{person_id}")
     suspend fun getPersonDetails(
         @Path("person_id") personId: Int,
-        @Query("api_key") apiKey: String,
         @Query("append_to_response") appendToResponse: String = "combined_credits",
         @Query("language") language: String? = null
     ): TmdbPersonDetails
 
     @GET("movie/{movie_id}/external_ids")
     suspend fun getMovieExternalIds(
-        @Path("movie_id") movieId: Int,
-        @Query("api_key") apiKey: String
+        @Path("movie_id") movieId: Int
     ): TmdbExternalIds
 
     @GET("tv/{tv_id}/external_ids")
     suspend fun getTvExternalIds(
-        @Path("tv_id") tvId: Int,
-        @Query("api_key") apiKey: String
+        @Path("tv_id") tvId: Int
     ): TmdbExternalIds
 
     @GET("movie/{movie_id}/watch/providers")
     suspend fun getMovieWatchProviders(
-        @Path("movie_id") movieId: Int,
-        @Query("api_key") apiKey: String
+        @Path("movie_id") movieId: Int
     ): TmdbWatchProvidersResponse
 
     @GET("tv/{tv_id}/watch/providers")
     suspend fun getTvWatchProviders(
-        @Path("tv_id") tvId: Int,
-        @Query("api_key") apiKey: String
+        @Path("tv_id") tvId: Int
     ): TmdbWatchProvidersResponse
     
     @GET("search/multi")
     suspend fun searchMulti(
-        @Query("api_key") apiKey: String,
         @Query("query") query: String,
         @Query("language") language: String? = null,
         @Query("page") page: Int = 1
@@ -163,7 +145,6 @@ interface TmdbApi {
 
     @GET("search/movie")
     suspend fun searchMovies(
-        @Query("api_key") apiKey: String,
         @Query("query") query: String,
         @Query("language") language: String? = null,
         @Query("page") page: Int = 1,
@@ -173,7 +154,6 @@ interface TmdbApi {
 
     @GET("search/tv")
     suspend fun searchTv(
-        @Query("api_key") apiKey: String,
         @Query("query") query: String,
         @Query("language") language: String? = null,
         @Query("page") page: Int = 1,
@@ -183,7 +163,6 @@ interface TmdbApi {
     @GET("find/{external_id}")
     suspend fun findByExternalId(
         @Path("external_id") externalId: String,
-        @Query("api_key") apiKey: String,
         @Query("external_source") externalSource: String = "imdb_id"
     ): TmdbFindResponse
 
@@ -191,7 +170,6 @@ interface TmdbApi {
     suspend fun getReviews(
         @Path("media_type") mediaType: String,
         @Path("id") id: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbReviewsResponse
 
@@ -204,7 +182,6 @@ interface TmdbApi {
     @GET("collection/{collection_id}")
     suspend fun getTmdbCollection(
         @Path("collection_id") collectionId: Int,
-        @Query("api_key") apiKey: String,
         @Query("language") language: String? = null
     ): TmdbCollectionResponse
 }

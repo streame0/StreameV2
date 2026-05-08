@@ -12,7 +12,6 @@ plugins {
     id("androidx.baselineprofile")
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
     id("io.gitlab.arturbosch.detekt")
-    kotlin("plugin.serialization")
     // Firebase Crashlytics - uncomment after adding google-services.json
     // id("com.google.gms.google-services")
     // id("com.google.firebase.crashlytics")
@@ -31,6 +30,9 @@ android {
         // Lower minSdk to maximize compatibility and avoid "There was a problem parsing the package".
         minSdk = 21
         targetSdk = 35
+        // Force Hilt Application classes into the primary DEX so they're
+        // available during the very first moments of process startup.
+        multiDexKeepProguard = file("multidex-config.pro")
         versionCode = 1
         versionName = "1.1"
         buildConfigField("String", "GITHUB_OWNER", "\"streame0\"")
@@ -123,7 +125,7 @@ android {
 
         // Staging build type: release-grade optimizations but signed with the
         // debug keystore so the APK installs as an update over an existing
-        // debug build (preserves profile/IPTV/DataStore). NO applicationId
+        // debug build (preserves profile/DataStore). NO applicationId
         // suffix — it MUST resolve to the same package as debug/release.
         create("staging") {
             initWith(getByName("release"))
@@ -184,6 +186,8 @@ ksp {
     arg("dagger.fastInit", "enabled")
     arg("dagger.formatGeneratedSource", "disabled")
     arg("dagger.hilt.android.internal.disableAndroidSuperclassValidation", "true")
+    // Room schema export — enables migration testing and validation
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -274,21 +278,19 @@ dependencies {
     implementation("io.coil-kt:coil-svg:2.5.0")
     implementation("com.google.zxing:core:3.5.3")
 
-    // Supabase (optional - for cloud sync)
-    implementation("io.github.jan-tennert.supabase:postgrest-kt:2.0.4")
-    implementation("io.github.jan-tennert.supabase:gotrue-kt:2.0.4")
-    implementation("io.ktor:ktor-client-android:2.3.7")
+    implementation("org.conscrypt:conscrypt-android:2.5.2")
 
     // DataStore for preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")
 
-    // Google Sign-In / Credential Manager for TV
-    implementation("androidx.credentials:credentials:1.3.0")
-    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
-    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    // Room database (local-first storage)
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1") // Flow/Coroutine support
+    ksp("androidx.room:room-compiler:2.6.1")
+
 
     // WorkManager for background sync
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.hilt:hilt-work:1.1.0")
     ksp("androidx.hilt:hilt-compiler:1.1.0")
 
@@ -357,37 +359,6 @@ fun localSecretValue(name: String): String {
     return ""
 }
 
-val validateReleaseSupabaseSecrets = tasks.register("validateReleaseSupabaseSecrets") {
-    doLast {
-        val supabaseUrl = localSecretValue("SUPABASE_URL")
-        val supabaseAnonKey = localSecretValue("SUPABASE_ANON_KEY")
-        require(
-            supabaseUrl.startsWith("https://") &&
-                supabaseUrl.endsWith(".supabase.co") &&
-                !supabaseUrl.contains("your-project", ignoreCase = true)
-        ) {
-            "Release builds require a real SUPABASE_URL in secrets.properties, Gradle properties, or the environment."
-        }
-        require(
-            supabaseAnonKey.length > 40 &&
-                !supabaseAnonKey.equals("your-supabase-anon-key", ignoreCase = true)
-        ) {
-            "Release builds require a real SUPABASE_ANON_KEY in secrets.properties, Gradle properties, or the environment."
-        }
-    }
-}
-
-tasks.configureEach {
-    if (name in setOf(
-            "prePlayReleaseBuild",
-            "preSideloadReleaseBuild",
-            "prePlayStagingBuild",
-            "preSideloadStagingBuild"
-        )
-    ) {
-        dependsOn(validateReleaseSupabaseSecrets)
-    }
-}
 
 detekt {
     // Configuration file

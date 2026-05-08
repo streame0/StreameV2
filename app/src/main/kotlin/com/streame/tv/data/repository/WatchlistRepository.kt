@@ -49,7 +49,6 @@ class WatchlistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val profileManager: ProfileManager,
     private val tmdbApi: TmdbApi,
-    private val invalidationBus: CloudSyncInvalidationBus
 ) {
     private val gson = Gson()
 
@@ -321,7 +320,6 @@ class WatchlistRepository @Inject constructor(
         context.traktDataStore.edit { prefs ->
             prefs[watchlistKeyFor(safeProfileId)] = json
         }
-        invalidationBus.markDirty(CloudSyncScope.WATCHLIST, safeProfileId, "import watchlist")
         if (profileManager.getProfileIdSync() == safeProfileId) {
             clearWatchlistCache()
         }
@@ -353,17 +351,15 @@ class WatchlistRepository @Inject constructor(
         context.traktDataStore.edit { prefs ->
             prefs[watchlistKey()] = json
         }
-        invalidationBus.markDirty(CloudSyncScope.WATCHLIST, profileManager.getProfileIdSync(), "save watchlist")
     }
 
     /**
      * Enrich a watchlist item with TMDB data
      */
     private suspend fun enrichWatchlistItem(item: LocalWatchlistItem): MediaItem? {
-        val apiKey = Constants.TMDB_API_KEY
         return try {
             if (item.mediaType == "tv") {
-                val details = tmdbApi.getTvDetails(item.tmdbId, apiKey)
+                val details = tmdbApi.getTvDetails(item.tmdbId)
                 MediaItem(
                     id = item.tmdbId,
                     title = details.name,
@@ -380,7 +376,7 @@ class WatchlistRepository @Inject constructor(
                     sourceOrder = item.sourceOrder
                 )
             } else {
-                val details = tmdbApi.getMovieDetails(item.tmdbId, apiKey)
+                val details = tmdbApi.getMovieDetails(item.tmdbId)
                 MediaItem(
                     id = item.tmdbId,
                     title = details.title,

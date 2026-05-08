@@ -4,13 +4,12 @@
 
 # Streame - Media Hub for Android TV, Fire TV, Mobile, and Tablet
 
-A media hub application for Android TV, Fire TV, phones, and tablets with a modern interface. Browse catalogs, sync your setup across profiles and devices, discover content, watch IPTV, and play videos from your configured sources.
+A media hub application for Android TV, Fire TV, phones, and tablets with a modern interface. Browse catalogs, sync your setup across profiles and devices, discover content, and play videos from your configured sources.
 
 ## Features
 
-- **Live TV (IPTV)** - M3U/Xtream playlist support with group navigation, EPG, favorites, recents, and fullscreen playback
 - **Catalog Management** - Built-in + custom Trakt/MDBList catalogs with ordering controls
-- **Streame Cloud (Optional)** - QR sign-in with cloud sync for profiles, settings, addons, catalogs, watch state, subtitles, and IPTV config
+- **Streame Cloud (Optional)** - QR sign-in with cloud sync for profiles, settings, addons, catalogs, watch state, and subtitles
 - **Addon Support** - Connect compatible addons and community HTTP sources
 - **Media Browser** - Browse and discover content with TMDB metadata
 - **Beautiful UI** - Modern horizontal row browsing optimized for D-pad/remote
@@ -46,9 +45,9 @@ Note: If you mean **DTX**, Streame supports **DTS-family audio formats** (DTS/DT
 |------|----------|
 | ![Cast](screenshots/player.png) | ![Profiles](screenshots/profiles_v184.png) |
 
-| Live TV | Catalogs (Trakt + MDBList) |
-|---------|------------------------------|
-| ![Live TV](screenshots/live_tv_v184.png) | ![Catalogs](screenshots/catalogs_v13.png) |
+| Catalogs (Trakt + MDBList) |
+|----------------------------|
+| ![Catalogs](screenshots/catalogs_v13.png) |
 
 ## Download
 
@@ -115,10 +114,6 @@ cp keystore.properties.template keystore.properties
 
 `keystore.properties` and keystore files are ignored and should stay private.
 
-## Live TV Data
-
-The old checked-in `epg_sample.xml` was removed because it was a large local sample file. Live TV does not need that repository file. Configure your own M3U playlist and optional XMLTV/EPG URL inside the app settings. Xtream-style host/user/password input can derive playlist and EPG URLs automatically.
-
 ## Release Checks
 
 The old GitHub workflow and CSV release gate were removed. Until a replacement CI/release pipeline is added, use this manual release checklist before publishing:
@@ -129,7 +124,7 @@ The old GitHub workflow and CSV release gate were removed. Until a replacement C
 ./gradlew :app:assembleSideloadRelease
 ```
 
-Smoke-test at least startup, profile switching, playback, stream fallback, subtitle/audio switching, IPTV/EPG loading, addon add/remove, search, settings navigation, background sync, and repeated player open/close on the device classes you support. For Windows verification, also run `.\gradlew.bat :app:compilePlayDebugKotlin` from PowerShell or Command Prompt.
+Smoke-test at least startup, profile switching, playback, stream fallback, subtitle/audio switching, addon add/remove, search, settings navigation, background sync, and repeated player open/close on the device classes you support. For Windows verification, also run `.\gradlew.bat :app:compilePlayDebugKotlin` from PowerShell or Command Prompt.
 
 ## Support
 

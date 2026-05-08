@@ -34,6 +34,8 @@ import com.streame.tv.util.Constants
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -81,12 +83,18 @@ class MediaRepository @Inject constructor(
         val hasMore: Boolean
     )
 
-    private val apiKey = Constants.TMDB_API_KEY
     private val gson = Gson()
 
     /** TMDB content language (e.g. "en-US", "fr-FR", "nl-NL"). Null = TMDB default (English). */
     @Volatile
     var contentLanguage: String? = null
+        set(value) {
+            field = value
+            // Clear caches when language changes
+            detailsCache.clear()
+            addonImdbToTmdbCache.clear()
+            addonTitleToTmdbCache.clear()
+        }
 
     // === IN-MEMORY CACHE FOR PERFORMANCE ===
     private data class CacheEntry<T>(val data: T, val timestamp: Long)
@@ -109,6 +117,10 @@ class MediaRepository @Inject constructor(
     private val addonImdbToTmdbCache = ConcurrentHashMap<String, CacheEntry<Pair<MediaType, Int>?>>()
     private val addonTitleToTmdbCache = ConcurrentHashMap<String, CacheEntry<Pair<MediaType, Int>?>>()
     private val collectionRefsCache = ConcurrentHashMap<String, CacheEntry<List<Pair<MediaType, Int>>>>()
+
+    // In-flight request deduplication: prevents concurrent coroutines from making
+    // duplicate TMDB API calls for the same movie/TV ID before the first one caches.
+    private val detailsInFlight = ConcurrentHashMap<String, Mutex>()
 
     private fun <T> getFromCache(cache: Map<String, CacheEntry<T>>, key: String): T? {
         val entry = cache[key] ?: return null
@@ -1354,14 +1366,14 @@ class MediaRepository @Inject constructor(
         val eighteenMonthsAgo = dateFormat.format(calendar.time)
 
         // Main trending - TMDB's daily trending for fresh content
-        val trendingMovies = async { fetchUpTo40 { page -> tmdbApi.getTrendingMovies(apiKey, language = contentLanguage, page = page) } }
-        val trendingTv = async { fetchUpTo40 { page -> tmdbApi.getTrendingTv(apiKey, language = contentLanguage, page = page) } }
+        val trendingMovies = async { fetchUpTo40 { page -> tmdbApi.getTrendingMovies(language = contentLanguage, page = page) } }
+        val trendingTv = async { fetchUpTo40 { page -> tmdbApi.getTrendingTv(language = contentLanguage, page = page) } }
 
         // Anime: popularity.desc tracks current buzz, air_date filter for currently airing
         val trendingAnime = async {
             fetchUpTo40 { page ->
                 tmdbApi.discoverTv(
-                    apiKey, language = contentLanguage,
+                    language = contentLanguage,
                     genres = "16",
                     keywords = "210024",  // "anime" keyword ID
                     sortBy = "popularity.desc",
@@ -1439,10 +1451,10 @@ class MediaRepository @Inject constructor(
 
         val response = runCatching {
             when (categoryId) {
-                "trending_movies" -> tmdbApi.getTrendingMovies(apiKey, language = contentLanguage, page = page)
-                "trending_tv" -> tmdbApi.getTrendingTv(apiKey, language = contentLanguage, page = page)
+                "trending_movies" -> tmdbApi.getTrendingMovies(language = contentLanguage, page = page)
+                "trending_tv" -> tmdbApi.getTrendingTv(language = contentLanguage, page = page)
                 "trending_anime" -> tmdbApi.discoverTv(
-                    apiKey, language = contentLanguage,
+                    language = contentLanguage,
                     genres = "16",
                     keywords = "210024",
                     sortBy = "popularity.desc",
@@ -1708,7 +1720,7 @@ class MediaRepository @Inject constructor(
     ): List<Pair<MediaType, Int>> {
         val id = source.tmdbCollectionId ?: return emptyList()
         val response = runCatching {
-            tmdbApi.getTmdbCollection(id, apiKey, language = contentLanguage)
+            tmdbApi.getTmdbCollection(id, language = contentLanguage)
         }.getOrNull() ?: return emptyList()
         return response.parts
             .sortedBy { it.releaseDate.orEmpty() }
@@ -1735,7 +1747,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverMovies(
-                    apiKey,
                     keywords = keyword,
                     sortBy = sortBy,
                     language = contentLanguage,
@@ -1747,7 +1758,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverTv(
-                    apiKey,
                     keywords = keyword,
                     sortBy = sortBy,
                     language = contentLanguage,
@@ -1761,7 +1771,6 @@ class MediaRepository @Inject constructor(
                         limit = limit
                     ) { page ->
                         tmdbApi.discoverMovies(
-                            apiKey,
                             keywords = keyword,
                             sortBy = sortBy,
                             language = contentLanguage,
@@ -1775,7 +1784,6 @@ class MediaRepository @Inject constructor(
                         limit = limit
                     ) { page ->
                         tmdbApi.discoverTv(
-                            apiKey,
                             keywords = keyword,
                             sortBy = sortBy,
                             language = contentLanguage,
@@ -1807,7 +1815,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverMovies(
-                    apiKey,
                     watchProviders = providerId,
                     watchRegion = region,
                     sortBy = sortBy,
@@ -1820,7 +1827,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverTv(
-                    apiKey,
                     watchProviders = providerId,
                     watchRegion = region,
                     sortBy = sortBy,
@@ -1873,7 +1879,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverMovies(
-                    apiKey,
                     genres = genreId.toString(),
                     sortBy = sortBy,
                     language = contentLanguage,
@@ -1885,7 +1890,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverTv(
-                    apiKey,
                     genres = genreId.toString(),
                     sortBy = sortBy,
                     language = contentLanguage,
@@ -1908,7 +1912,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverMovies(
-                    apiKey,
                     crew = personId.toString(),
                     sortBy = sortBy,
                     language = contentLanguage,
@@ -1920,7 +1923,6 @@ class MediaRepository @Inject constructor(
                 limit = limit
             ) { page ->
                 tmdbApi.discoverTv(
-                    apiKey,
                     people = personId.toString(),
                     sortBy = sortBy,
                     language = contentLanguage,
@@ -2159,7 +2161,6 @@ class MediaRepository @Inject constructor(
         val findResponse = runCatching {
             tmdbApi.findByExternalId(
                 externalId = normalizedImdb,
-                apiKey = apiKey,
                 externalSource = "imdb_id"
             )
         }.getOrNull()
@@ -2211,7 +2212,6 @@ class MediaRepository @Inject constructor(
 
         val response = runCatching {
             tmdbApi.searchMulti(
-                apiKey = apiKey,
                 query = cleanedTitle,
                 language = contentLanguage,
                 page = 1
@@ -2386,10 +2386,18 @@ class MediaRepository @Inject constructor(
             if (cached.duration.isNotBlank()) return cached
         }
 
-        val details = tmdbApi.getMovieDetails(movieId, apiKey, language = contentLanguage)
-        val item = details.toMediaItem()
-        detailsCache[cacheKey] = CacheEntry(item, System.currentTimeMillis())
-        return item
+        // Deduplicate concurrent calls for the same movie ID
+        val mutex = detailsInFlight.getOrPut(cacheKey) { Mutex() }
+        return mutex.withLock {
+            // Double-check cache after acquiring lock (another coroutine may have populated it)
+            getFromCache(detailsCache, cacheKey)?.let { cached ->
+                if (cached.duration.isNotBlank()) return@withLock cached
+            }
+            val details = tmdbApi.getMovieDetails(movieId, language = contentLanguage)
+            val item = details.toMediaItem()
+            detailsCache[cacheKey] = CacheEntry(item, System.currentTimeMillis())
+            item
+        }
     }
 
     /**
@@ -2406,10 +2414,18 @@ class MediaRepository @Inject constructor(
             if (cached.totalEpisodes != null) return cached
         }
 
-        val details = tmdbApi.getTvDetails(tvId, apiKey, language = contentLanguage)
-        val item = details.toMediaItem()
-        detailsCache[cacheKey] = CacheEntry(item, System.currentTimeMillis())
-        return item
+        // Deduplicate concurrent calls for the same TV ID
+        val mutex = detailsInFlight.getOrPut(cacheKey) { Mutex() }
+        return mutex.withLock {
+            // Double-check cache after acquiring lock
+            getFromCache(detailsCache, cacheKey)?.let { cached ->
+                if (cached.totalEpisodes != null) return@withLock cached
+            }
+            val details = tmdbApi.getTvDetails(tvId, language = contentLanguage)
+            val item = details.toMediaItem()
+            detailsCache[cacheKey] = CacheEntry(item, System.currentTimeMillis())
+            item
+        }
     }
     
     /**
@@ -2444,7 +2460,7 @@ class MediaRepository @Inject constructor(
             }
         }
 
-        val season = tmdbApi.getTvSeason(tvId, seasonNumber, apiKey, language = contentLanguage)
+        val season = tmdbApi.getTvSeason(tvId, seasonNumber, language = contentLanguage)
 
         val episodes = season.episodes.map { episode ->
             val episodeKey = "show_tmdb:$tvId:$seasonNumber:${episode.episodeNumber}"
@@ -2464,7 +2480,7 @@ class MediaRepository @Inject constructor(
         getFromCache(castCache, cacheKey)?.let { return it }
 
         val type = if (mediaType == MediaType.TV) "tv" else "movie"
-        val credits = tmdbApi.getCredits(type, mediaId, apiKey, language = contentLanguage)
+        val credits = tmdbApi.getCredits(type, mediaId, language = contentLanguage)
         val cast = credits.cast
             .distinctBy { it.id } // TMDB can occasionally return duplicate cast IDs.
             .take(15)
@@ -2483,7 +2499,7 @@ class MediaRepository @Inject constructor(
 
         val type = if (mediaType == MediaType.TV) "tv" else "movie"
         val recommendations = try {
-            tmdbApi.getRecommendations(type, mediaId, apiKey, language = contentLanguage)
+            tmdbApi.getRecommendations(type, mediaId, language = contentLanguage)
         } catch (e: Exception) {
             null
         }
@@ -2494,7 +2510,7 @@ class MediaRepository @Inject constructor(
                 .distinctBy { it.id }
                 .take(12)
         } else {
-            val similar = tmdbApi.getSimilar(type, mediaId, apiKey, language = contentLanguage)
+            val similar = tmdbApi.getSimilar(type, mediaId, language = contentLanguage)
             similar.results
                 .map { it.toMediaItem(mediaType) }
                 .distinctBy { it.id }
@@ -2516,7 +2532,7 @@ class MediaRepository @Inject constructor(
 
         val type = if (mediaType == MediaType.TV) "tv" else "movie"
         return try {
-            val images = tmdbApi.getImages(type, mediaId, apiKey)
+            val images = tmdbApi.getImages(type, mediaId)
             // Quality ranking for clearlogos: prefer PNG over SVG (the app has
             // no SVG decoder), English over other locales, and among the
             // survivors pick the highest community-rated logo (vote_average
@@ -2558,7 +2574,7 @@ class MediaRepository @Inject constructor(
     suspend fun getTrailerKey(mediaType: MediaType, mediaId: Int): String? {
         val type = if (mediaType == MediaType.TV) "tv" else "movie"
         return try {
-            val videos = tmdbApi.getVideos(type, mediaId, apiKey, language = contentLanguage)
+            val videos = tmdbApi.getVideos(type, mediaId, language = contentLanguage)
             val trailer = videos.results.find { it.type == "Trailer" && it.site == "YouTube" && it.official }
                 ?: videos.results.find { it.type == "Trailer" && it.site == "YouTube" }
                 ?: videos.results.find { it.type == "Teaser" && it.site == "YouTube" }
@@ -2573,7 +2589,7 @@ class MediaRepository @Inject constructor(
      * Get person details
      */
     suspend fun getPersonDetails(personId: Int): PersonDetails {
-        val person = tmdbApi.getPersonDetails(personId, apiKey, language = contentLanguage)
+        val person = tmdbApi.getPersonDetails(personId, language = contentLanguage)
         return person.toPersonDetails()
     }
     
@@ -2581,7 +2597,7 @@ class MediaRepository @Inject constructor(
      * Search media
      */
     suspend fun search(query: String): List<MediaItem> {
-        val results = tmdbApi.searchMulti(apiKey, query, language = contentLanguage)
+        val results = tmdbApi.searchMulti(query, language = contentLanguage)
         val items = results.results
             .filter { it.mediaType == "movie" || it.mediaType == "tv" }
             .map {
@@ -2607,7 +2623,7 @@ class MediaRepository @Inject constructor(
         releaseDateLte: String? = null,
         releaseDateGte: String? = null
     ): List<MediaItem> {
-        val response = tmdbApi.discoverMovies(apiKey, genres = genres, sortBy = sortBy, minVoteCount = minVoteCount, page = page, originalLanguage = language, year = year, keywords = keywords, language = contentLanguage, releaseDateLte = releaseDateLte, releaseDateGte = releaseDateGte)
+        val response = tmdbApi.discoverMovies(genres = genres, sortBy = sortBy, minVoteCount = minVoteCount, page = page, originalLanguage = language, year = year, keywords = keywords, language = contentLanguage, releaseDateLte = releaseDateLte, releaseDateGte = releaseDateGte)
         val items = response.results.map { it.toMediaItem(MediaType.MOVIE) }
         cacheItems(items)
         return items
@@ -2627,7 +2643,7 @@ class MediaRepository @Inject constructor(
         airDateLte: String? = null,
         airDateGte: String? = null
     ): List<MediaItem> {
-        val response = tmdbApi.discoverTv(apiKey, genres = genres, sortBy = sortBy, minVoteCount = minVoteCount, page = page, originalLanguage = language, year = year, keywords = keywords, language = contentLanguage, airDateLte = airDateLte, airDateGte = airDateGte)
+        val response = tmdbApi.discoverTv(genres = genres, sortBy = sortBy, minVoteCount = minVoteCount, page = page, originalLanguage = language, year = year, keywords = keywords, language = contentLanguage, airDateLte = airDateLte, airDateGte = airDateGte)
         val items = response.results.map { it.toMediaItem(MediaType.TV) }
         cacheItems(items)
         return items
@@ -2641,19 +2657,19 @@ class MediaRepository @Inject constructor(
             val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
             val items = when (categoryId) {
                 "trending_movies" -> {
-                    val r1 = tmdbApi.getTrendingMovies(apiKey, language = contentLanguage, page = 1)
+                    val r1 = tmdbApi.getTrendingMovies(language = contentLanguage, page = 1)
                     r1.results.map { it.toMediaItem(MediaType.MOVIE) }
                 }
                 "popular_movies" -> {
-                    val r1 = tmdbApi.discoverMovies(apiKey, sortBy = "popularity.desc", language = contentLanguage, page = 1)
+                    val r1 = tmdbApi.discoverMovies(sortBy = "popularity.desc", language = contentLanguage, page = 1)
                     r1.results.map { it.toMediaItem(MediaType.MOVIE) }
                 }
                 "popular_tv" -> {
-                    val r1 = tmdbApi.discoverTv(apiKey, sortBy = "popularity.desc", language = contentLanguage, page = 1)
+                    val r1 = tmdbApi.discoverTv(sortBy = "popularity.desc", language = contentLanguage, page = 1)
                     r1.results.map { it.toMediaItem(MediaType.TV) }
                 }
                 "top_rated_movies" -> {
-                    val r1 = tmdbApi.discoverMovies(apiKey, sortBy = "vote_average.desc", minVoteCount = 1000, language = contentLanguage, page = 1)
+                    val r1 = tmdbApi.discoverMovies(sortBy = "vote_average.desc", minVoteCount = 1000, language = contentLanguage, page = 1)
                     r1.results.map { it.toMediaItem(MediaType.MOVIE) }
                 }
                 "new_releases" -> {
@@ -2661,7 +2677,7 @@ class MediaRepository @Inject constructor(
                     val today = dateFormat.format(cal.time)
                     cal.add(java.util.Calendar.DAY_OF_YEAR, -30)
                     val thirtyDaysAgo = dateFormat.format(cal.time)
-                    val r1 = tmdbApi.discoverMovies(apiKey, sortBy = "popularity.desc", language = contentLanguage, releaseDateGte = thirtyDaysAgo, releaseDateLte = today, page = 1)
+                    val r1 = tmdbApi.discoverMovies(sortBy = "popularity.desc", language = contentLanguage, releaseDateGte = thirtyDaysAgo, releaseDateLte = today, page = 1)
                     r1.results.map { it.toMediaItem(MediaType.MOVIE) }
                 }
                 else -> emptyList()
@@ -2685,7 +2701,7 @@ class MediaRepository @Inject constructor(
 
         val type = if (mediaType == MediaType.TV) "tv" else "movie"
         return try {
-            val response = tmdbApi.getReviews(type, mediaId, apiKey, language = contentLanguage)
+            val response = tmdbApi.getReviews(type, mediaId, language = contentLanguage)
             val reviews = response.results.take(10).map { review ->
                 Review(
                     id = review.id,
@@ -2727,8 +2743,8 @@ class MediaRepository @Inject constructor(
 
         val response = runCatching {
             when (mediaType) {
-                MediaType.MOVIE -> tmdbApi.getMovieWatchProviders(mediaId, apiKey)
-                MediaType.TV -> tmdbApi.getTvWatchProviders(mediaId, apiKey)
+                MediaType.MOVIE -> tmdbApi.getMovieWatchProviders(mediaId)
+                MediaType.TV -> tmdbApi.getTvWatchProviders(mediaId)
             }
         }.getOrNull()
 
@@ -2954,7 +2970,7 @@ class MediaRepository @Inject constructor(
                 async {
                     semaphore.withPermit {
                         runCatching {
-                            val search = tmdbApi.searchMulti(apiKey, candidate.title, language = contentLanguage).results
+                            val search = tmdbApi.searchMulti(candidate.title, language = contentLanguage).results
                             val typeMatched = search.filter { result ->
                                 val resultType = when (result.mediaType) {
                                     "movie" -> MediaType.MOVIE

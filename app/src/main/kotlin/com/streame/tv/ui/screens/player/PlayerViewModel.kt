@@ -17,7 +17,6 @@ import com.streame.tv.data.repository.ProfileManager
 import com.streame.tv.data.repository.SkipInterval
 import com.streame.tv.data.repository.SkipIntroRepository
 import com.streame.tv.data.repository.StreamRepository
-import com.streame.tv.data.repository.CloudSyncRepository
 import com.streame.tv.data.repository.LauncherContinueWatchingRepository
 import com.streame.tv.data.repository.TraktRepository
 import com.streame.tv.data.repository.WatchHistoryEntry
@@ -92,7 +91,6 @@ class PlayerViewModel @Inject constructor(
     private val streamRepository: StreamRepository,
     private val traktRepository: TraktRepository,
     private val watchHistoryRepository: WatchHistoryRepository,
-    private val cloudSyncRepository: CloudSyncRepository,
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
     private val tmdbApi: TmdbApi,
     private val skipIntroRepository: SkipIntroRepository,
@@ -124,6 +122,7 @@ class PlayerViewModel @Inject constructor(
     private var lastWatchHistorySaveTime: Long = 0
     private var lastIsPlaying: Boolean = false
     private var hasMarkedWatched: Boolean = false
+    private var userManuallySelectedStream: Boolean = false
 
     // Skip intro
     private var skipIntervals: List<SkipInterval> = emptyList()
@@ -138,15 +137,19 @@ class PlayerViewModel @Inject constructor(
     private val SCROBBLE_UPDATE_INTERVAL_MS = 20_000L
     private val WATCH_HISTORY_UPDATE_INTERVAL_MS = 15_000L
 
-    private fun defaultSubtitleKey() = profileManager.profileStringKey("default_subtitle")
+    private val gson = Gson()
+
+    // Subtitle helper — extracted logic for testability and reduced file size
+    private val subtitleHelper = PlayerSubtitleHelper(context, profileManager, gson)
+
+    private fun defaultSubtitleKey() = subtitleHelper.defaultSubtitleKey()
     private fun defaultAudioLanguageKey() = profileManager.profileStringKey("default_audio_language")
-    private fun subtitleUsageKey() = profileManager.profileStringKey("subtitle_usage_v1")
-    private fun filterSubtitlesByLanguageKey() = profileManager.profileBooleanKey("filter_subtitles_by_lang")
-    private fun secondarySubtitleKey() = profileManager.profileStringKey("secondary_subtitle")
+    private fun subtitleUsageKey() = subtitleHelper.subtitleUsageKey()
+    private fun filterSubtitlesByLanguageKey() = subtitleHelper.filterSubtitlesByLanguageKey()
+    private fun secondarySubtitleKey() = subtitleHelper.secondarySubtitleKey()
     private fun frameRateMatchingModeKey() = profileManager.profileStringKey("frame_rate_matching_mode")
     private fun autoPlayNextKey() = profileManager.profileBooleanKey("auto_play_next")
     private fun showLoadingStatsKey() = profileManager.profileBooleanKey("show_loading_stats")
-    private val gson = Gson()
     private val knownLanguageCodes = setOf(
         "en", "es", "fr", "de", "it", "pt", "nl", "ru", "zh", "ja", "ko",
         "ar", "hi", "tr", "pl", "sv", "no", "da", "fi", "el", "cs", "hu",
@@ -179,6 +182,7 @@ class PlayerViewModel @Inject constructor(
         currentPreferredBingeGroup = preferredBingeGroup?.trim()?.takeIf { it.isNotBlank() }
         currentEpisodeTitle = null
         hasMarkedWatched = false
+        userManuallySelectedStream = false
         lastIsPlaying = false
         lastScrobbleTime = 0
         lastWatchHistorySaveTime = 0
@@ -461,9 +465,8 @@ class PlayerViewModel @Inject constructor(
                             val u = stream.url?.trim().orEmpty()
                             u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
                         }
-                    val existingVod = _uiState.value.streams.filter { it.addonId == "Playlists_xtream_vod" }
                     val mergedStreams = sortStreamsByQualityAndSize(
-                        (allStreams + existingVod)
+                        allStreams
                             .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" },
                         preferredLanguage
                     )
@@ -511,7 +514,7 @@ class PlayerViewModel @Inject constructor(
                             stream.behaviorHints.notWebReady != true &&
                             !stream.url.isNullOrBlank()
                     }
-                    val shouldSelectNow = !autoplaySelected && mergedStreams.isNotEmpty() && (
+                    val shouldSelectNow = !autoplaySelected && !userManuallySelectedStream && mergedStreams.isNotEmpty() && (
                         cacheHit ||
                             progressive.isFinal ||
                             hasCachedReadyStream ||
@@ -525,7 +528,7 @@ class PlayerViewModel @Inject constructor(
                     }
                 }
 
-                if (!autoplaySelected && lastMergedStreams.isNotEmpty()) {
+                if (!autoplaySelected && !userManuallySelectedStream && lastMergedStreams.isNotEmpty()) {
                     autoplaySelected = true
                     autoplaySelectBest(lastMergedStreams, preferredLanguage)
                 }
@@ -575,9 +578,9 @@ class PlayerViewModel @Inject constructor(
     private suspend fun fetchMediaMetadata(mediaType: MediaType, mediaId: Int) {
         try {
             val details = if (mediaType == MediaType.TV) {
-                tmdbApi.getTvDetails(mediaId, Constants.TMDB_API_KEY)
+                tmdbApi.getTvDetails(mediaId)
             } else {
-                tmdbApi.getMovieDetails(mediaId, Constants.TMDB_API_KEY)
+                tmdbApi.getMovieDetails(mediaId)
             }
 
             val logoUrl = try {
@@ -600,7 +603,7 @@ class PlayerViewModel @Inject constructor(
                 val episode = currentEpisode
                 if (season != null && episode != null) {
                     currentEpisodeTitle = runCatching {
-                        val seasonDetails = tmdbApi.getTvSeason(mediaId, season, Constants.TMDB_API_KEY)
+                        val seasonDetails = tmdbApi.getTvSeason(mediaId, season)
                         seasonDetails.episodes.firstOrNull { it.episodeNumber == episode }?.name
                     }.getOrNull()
                 }
@@ -634,8 +637,8 @@ class PlayerViewModel @Inject constructor(
     private suspend fun resolveExternalIds(mediaType: MediaType, mediaId: Int): ExternalIds {
         return try {
             val ids = when (mediaType) {
-                MediaType.MOVIE -> tmdbApi.getMovieExternalIds(mediaId, Constants.TMDB_API_KEY)
-                MediaType.TV -> tmdbApi.getTvExternalIds(mediaId, Constants.TMDB_API_KEY)
+                MediaType.MOVIE -> tmdbApi.getMovieExternalIds(mediaId)
+                MediaType.TV -> tmdbApi.getTvExternalIds(mediaId)
             }
             ExternalIds(imdbId = ids.imdbId, tvdbId = ids.tvdbId)
         } catch (_: Exception) {
@@ -693,57 +696,10 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private suspend fun getDefaultSubtitle(): String {
-        return try {
-            val prefs = context.settingsDataStore.data.first()
-            val raw = prefs[defaultSubtitleKey()]?.trim().orEmpty()
-            if (isSubtitleDisabledPreference(raw)) "Off" else raw
-        } catch (_: Exception) {
-            "Off"
-        }
-    }
+    private suspend fun getDefaultSubtitle(): String = subtitleHelper.getDefaultSubtitle()
 
-    // Returns subs filtered to the preferred language(s) when the setting is enabled.
-    // Tries primary language first; if nothing matches, tries secondary; falls back to full list.
-    private suspend fun filterSubsByPreferredLanguage(subs: List<Subtitle>): List<Subtitle> {
-        val prefs = runCatching { context.settingsDataStore.data.first() }.getOrNull() ?: return subs
-        val enabled = prefs[filterSubtitlesByLanguageKey()] ?: true
-        if (!enabled) return subs
-        val preferred = prefs[defaultSubtitleKey()]?.trim().orEmpty()
-        if (isSubtitleDisabledPreference(preferred)) return subs
-        val normalizedPref = normalizeLanguage(preferred)
-        if (normalizedPref.isBlank()) return subs
-
-        fun matchesLang(sub: Subtitle, lang: String): Boolean {
-            val tokens = buildSet {
-                add(normalizeLanguage(sub.lang))
-                add(normalizeLanguage(sub.label))
-                Regex("[A-Za-z-]+").findAll("${sub.lang} ${sub.label}")
-                    .map { normalizeLanguage(it.value) }
-                    .filter { it.isNotBlank() }
-                    .forEach { add(it) }
-            }
-            if (tokens.contains(lang)) return true
-            // Substring match only for long-form names — avoids "en" matching "Indonesian"
-            if (lang.length > 2) {
-                return sub.lang.lowercase().contains(lang) || sub.label.lowercase().contains(lang)
-            }
-            return false
-        }
-
-        val primary = subs.filter { matchesLang(it, normalizedPref) }
-
-        val secondary = prefs[secondarySubtitleKey()]?.trim().orEmpty()
-        val secondaryFiltered = if (!isSubtitleDisabledPreference(secondary)) {
-            val normalizedSecondary = normalizeLanguage(secondary)
-            if (normalizedSecondary.isNotBlank() && normalizedSecondary != normalizedPref) {
-                subs.filter { matchesLang(it, normalizedSecondary) }
-            } else emptyList()
-        } else emptyList()
-
-        val combined = (primary + secondaryFiltered).distinctBy { it.id }
-        return combined.ifEmpty { subs }
-    }
+    private suspend fun filterSubsByPreferredLanguage(subs: List<Subtitle>): List<Subtitle> =
+        subtitleHelper.filterSubsByPreferredLanguage(subs)
 
     private suspend fun resolveFrameRateMatchingMode(): String {
         return try {
@@ -760,64 +716,12 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun applyPreferredSubtitle(preference: String, subtitles: List<Subtitle>, fallbackLanguage: String?) {
-        if (isSubtitleDisabledPreference(preference)) {
-            _uiState.value = _uiState.value.copy(selectedSubtitle = null)
-            return
-        }
-
-        // Normalize language codes for matching
-        val normalizedPref = normalizeLanguage(preference)
-        val normalizedFallback = fallbackLanguage
-            ?.let { normalizeLanguage(it) }
-            ?.takeIf { it.isNotBlank() && it != normalizedPref }
-
-        fun subtitleTokens(sub: Subtitle): Set<String> {
-            val rawTokens = Regex("[A-Za-z-]+").findAll("${sub.lang} ${sub.label}")
-                .map { it.value }
-                .toList()
-            val normalized = rawTokens.map { normalizeLanguage(it) }.filter { it.isNotBlank() }
-            return buildSet {
-                add(normalizeLanguage(sub.lang))
-                add(normalizeLanguage(sub.label))
-                addAll(normalized)
-            }.filter { it.isNotBlank() }.toSet()
-        }
-
-        fun findMatch(target: String): Subtitle? {
-            // Prefer embedded subtitles over addon subtitles when both match
-            val embeddedMatch = subtitles.firstOrNull { sub ->
-                sub.isEmbedded && subtitleTokens(sub).contains(target)
-            } ?: subtitles.firstOrNull { sub ->
-                sub.isEmbedded && (sub.label.lowercase().contains(target) || sub.lang.lowercase().contains(target))
-            }
-            if (embeddedMatch != null) return embeddedMatch
-
-            return subtitles.firstOrNull { sub ->
-                subtitleTokens(sub).contains(target)
-            } ?: subtitles.firstOrNull { sub ->
-                sub.label.lowercase().contains(target) || sub.lang.lowercase().contains(target)
-            }
-        }
-
-        // Prioritize: embedded match > exact normalized match > fallback language > English fallback.
-        val match = findMatch(normalizedPref)
-            ?: normalizedFallback?.let { findMatch(it) }
-            ?: if (normalizedPref != "en") findMatch("en") else null
-
-        if (match != null) {
-            _uiState.value = _uiState.value.copy(selectedSubtitle = match)
-        }
+        val selected = subtitleHelper.applyPreferredSubtitle(preference, subtitles, fallbackLanguage)
+        _uiState.value = _uiState.value.copy(selectedSubtitle = selected)
     }
 
-    private fun isSubtitleDisabledPreference(value: String?): Boolean {
-        val normalized = value?.trim()?.lowercase().orEmpty()
-        return normalized.isBlank() ||
-            normalized == "off" ||
-            normalized == "none" ||
-            normalized == "no subtitles" ||
-            normalized == "disabled" ||
-            normalized == "disable"
-    }
+    private fun isSubtitleDisabledPreference(value: String?): Boolean =
+        PlayerSubtitleHelper.isSubtitleDisabledPreference(value)
 
     private fun qualityScore(quality: String): Int {
         return when {
@@ -1110,102 +1014,8 @@ class PlayerViewModel @Inject constructor(
             lower.contains("multi-audio")
     }
 
-    /**
-     * Normalize language codes to a standard format for matching
-     * Maps: "English" -> "en", "eng" -> "en", "Spanish" -> "es", etc.
-     */
-    private fun normalizeLanguage(lang: String): String {
-        val lowerLang = lang.lowercase().trim()
-        return when {
-            // Full names
-            lowerLang == "english" || lowerLang.startsWith("english") -> "en"
-            lowerLang == "spanish" || lowerLang.startsWith("spanish") || lowerLang == "espanol" -> "es"
-            lowerLang == "french" || lowerLang.startsWith("french") || lowerLang == "francais" -> "fr"
-            lowerLang == "german" || lowerLang.startsWith("german") || lowerLang == "deutsch" -> "de"
-            lowerLang == "italian" || lowerLang.startsWith("italian") -> "it"
-            lowerLang == "portuguese" -> "pt"
-            lowerLang == "portuguese (brazil)" ||
-                lowerLang == "portuguese-brazil" ||
-                lowerLang == "brazilian portuguese" ||
-                lowerLang == "brazil portuguese" ||
-                lowerLang == "pt-br" ||
-                lowerLang == "ptbr" -> "pt-br"
-            lowerLang.startsWith("portuguese") -> "pt"
-            lowerLang == "dutch" || lowerLang.startsWith("dutch") -> "nl"
-            lowerLang == "russian" || lowerLang.startsWith("russian") -> "ru"
-            lowerLang == "chinese" || lowerLang.startsWith("chinese") -> "zh"
-            lowerLang == "japanese" || lowerLang.startsWith("japanese") || lowerLang == "jp" || lowerLang == "jap" -> "ja"
-            lowerLang == "korean" || lowerLang.startsWith("korean") -> "ko"
-            lowerLang == "arabic" || lowerLang.startsWith("arabic") -> "ar"
-            lowerLang == "hindi" || lowerLang.startsWith("hindi") -> "hi"
-            lowerLang == "turkish" || lowerLang.startsWith("turkish") -> "tr"
-            lowerLang == "polish" || lowerLang.startsWith("polish") -> "pl"
-            lowerLang == "swedish" || lowerLang.startsWith("swedish") -> "sv"
-            lowerLang == "norwegian" || lowerLang.startsWith("norwegian") -> "no"
-            lowerLang == "danish" || lowerLang.startsWith("danish") -> "da"
-            lowerLang == "finnish" || lowerLang.startsWith("finnish") -> "fi"
-            lowerLang == "greek" || lowerLang.startsWith("greek") -> "el"
-            lowerLang == "czech" || lowerLang.startsWith("czech") -> "cs"
-            lowerLang == "hungarian" || lowerLang.startsWith("hungarian") -> "hu"
-            lowerLang == "romanian" || lowerLang.startsWith("romanian") -> "ro"
-            lowerLang == "thai" || lowerLang.startsWith("thai") -> "th"
-            lowerLang == "vietnamese" || lowerLang.startsWith("vietnamese") -> "vi"
-            lowerLang == "indonesian" || lowerLang.startsWith("indonesian") -> "id"
-            lowerLang == "hebrew" || lowerLang.startsWith("hebrew") -> "he"
-            lowerLang == "persian" || lowerLang.startsWith("persian") || lowerLang == "farsi" -> "fa"
-            lowerLang == "ukrainian" || lowerLang.startsWith("ukrainian") -> "uk"
-            lowerLang == "bengali" || lowerLang.startsWith("bengali") -> "bn"
-            lowerLang == "bulgarian" || lowerLang.startsWith("bulgarian") -> "bg"
-            lowerLang == "croatian" || lowerLang.startsWith("croatian") -> "hr"
-            lowerLang == "serbian" || lowerLang.startsWith("serbian") -> "sr"
-            lowerLang == "slovak" || lowerLang.startsWith("slovak") -> "sk"
-            lowerLang == "slovenian" || lowerLang.startsWith("slovenian") -> "sl"
-            lowerLang == "lithuanian" || lowerLang.startsWith("lithuanian") -> "lt"
-            lowerLang == "estonian" || lowerLang.startsWith("estonian") -> "et"
-            // ISO 639-1 codes (2 letter)
-            lowerLang.length == 2 -> lowerLang
-            // ISO 639-2 codes (3 letter)
-            lowerLang == "eng" -> "en"
-            lowerLang == "spa" -> "es"
-            lowerLang == "fra" || lowerLang == "fre" -> "fr"
-            lowerLang == "deu" || lowerLang == "ger" -> "de"
-            lowerLang == "ita" -> "it"
-            lowerLang == "por" -> "pt"
-            lowerLang == "pob" || lowerLang == "pobr" -> "pt-br"
-            lowerLang == "nld" || lowerLang == "dut" -> "nl"
-            lowerLang == "rus" -> "ru"
-            lowerLang == "zho" || lowerLang == "chi" -> "zh"
-            lowerLang == "jpn" -> "ja"
-            lowerLang == "kor" -> "ko"
-            lowerLang == "ara" -> "ar"
-            lowerLang == "hin" -> "hi"
-            lowerLang == "tur" -> "tr"
-            lowerLang == "pol" -> "pl"
-            lowerLang == "swe" -> "sv"
-            lowerLang == "nor" -> "no"
-            lowerLang == "dan" -> "da"
-            lowerLang == "fin" -> "fi"
-            lowerLang == "ell" || lowerLang == "gre" -> "el"
-            lowerLang == "ces" || lowerLang == "cze" -> "cs"
-            lowerLang == "hun" -> "hu"
-            lowerLang == "ron" || lowerLang == "rum" -> "ro"
-            lowerLang == "tha" -> "th"
-            lowerLang == "vie" -> "vi"
-            lowerLang == "ind" -> "id"
-            lowerLang == "heb" -> "he"
-            lowerLang == "fas" || lowerLang == "per" -> "fa"
-            lowerLang == "ukr" -> "uk"
-            lowerLang == "ben" -> "bn"
-            lowerLang == "bul" -> "bg"
-            lowerLang == "hrv" -> "hr"
-            lowerLang == "srp" -> "sr"
-            lowerLang == "slk" || lowerLang == "slo" -> "sk"
-            lowerLang == "slv" -> "sl"
-            lowerLang == "lit" -> "lt"
-            lowerLang == "est" -> "et"
-            else -> lowerLang
-        }
-    }
+    private fun normalizeLanguage(lang: String): String =
+        PlayerSubtitleHelper.normalizeLanguage(lang)
 
     // Track current stream index for auto-retry
     private var currentStreamIndex = 0
@@ -1218,12 +1028,21 @@ class PlayerViewModel @Inject constructor(
      * Select a stream for playback
      */
     fun selectStream(stream: StreamSource, resumePositionMs: Long? = null) {
-        viewModelScope.launch {
+        // Prevent autoplay from overriding this manual selection
+        userManuallySelectedStream = true
+        // Cancel any previous stream resolution to prevent stale results
+        selectStreamJob?.cancel()
+        val requestId = ++selectStreamRequestId
+        selectStreamJob = viewModelScope.launch {
             val requestedResumePosition = resumePositionMs?.coerceAtLeast(0L)
             var selectedOriginal = stream
+            // Invalidate cache to ensure fresh resolution for the new source
+            streamRepository.invalidateResolvedStreamCache(stream)
             var resolvedStream = runCatching {
                 streamRepository.resolveStreamForPlayback(stream)
             }.getOrNull() ?: stream
+            // If a newer selectStream call was made while we were resolving, discard this result
+            if (requestId != selectStreamRequestId) return@launch
             var url = resolvedStream.url
             if (url.isNullOrBlank()) {
                 val isP2p = !stream.infoHash.isNullOrBlank() ||
@@ -1262,6 +1081,8 @@ class PlayerViewModel @Inject constructor(
             }
 
             // Direct URL - use immediately (ExoPlayer handles redirects)
+            // Double-check that no newer selectStream call has superseded this one
+            if (requestId != selectStreamRequestId) return@launch
             _uiState.value = _uiState.value.copy(
                 selectedStream = resolvedStream,
                 selectedStreamUrl = url,
@@ -1374,44 +1195,9 @@ class PlayerViewModel @Inject constructor(
 
     fun updatePlayerTextTracks(playerTextTracks: List<Subtitle>) {
         viewModelScope.launch {
-            val current = _uiState.value.subtitles
-            val trackBackedIds = playerTextTracks.map { it.id }.toSet()
-
-            // Keep external subtitle entries that haven't been mapped to concrete track indices yet.
-            val unresolvedExternal = current.filter { subtitle ->
-                !subtitle.isEmbedded && subtitle.url.isNotBlank() && subtitle.id !in trackBackedIds
-            }
-
-            // Embedded subtitles first, then external/addon subtitles
-            val merged = (playerTextTracks + unresolvedExternal)
-                .distinctBy { subtitle ->
-                    val normalizedId = subtitle.id.trim()
-                    if (normalizedId.isNotBlank()) normalizedId
-                    else "${subtitle.lang}|${subtitle.label}|${subtitle.url}"
-                }
-
-            // Apply the same language filter used for fetched external subs so that
-            // ExoPlayer text-track updates don't re-add all embedded languages to the menu.
-            val filtered = filterSubsByPreferredLanguage(merged)
-
-            // Always keep the currently selected subtitle visible even if it doesn't
-            // match the preferred language filter so the active selection stays consistent.
-            val selected = _uiState.value.selectedSubtitle
-            val finalList = if (selected != null && filtered.none { it.id == selected.id }) {
-                (filtered + selected).distinctBy { s ->
-                    s.id.trim().ifBlank { "${s.lang}|${s.label}|${s.url}" }
-                }
-            } else {
-                filtered
-            }
-
-            val resolvedSelected = if (selected != null) {
-                finalList.firstOrNull { it.id == selected.id }
-                    ?: finalList.firstOrNull { selected.url.isNotBlank() && it.url == selected.url }
-                    ?: selected
-            } else {
-                null
-            }
+            val (finalList, resolvedSelected) = subtitleHelper.mergeAndFilterSubtitles(
+                playerTextTracks, _uiState.value.subtitles, _uiState.value.selectedSubtitle
+            )
 
             _uiState.value = _uiState.value.copy(
                 subtitles = finalList,
@@ -1441,24 +1227,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun recordSubtitleUsage(subtitle: Subtitle) {
-        viewModelScope.launch {
-            val raw = subtitle.lang.ifBlank { subtitle.label }
-            if (raw.isBlank()) return@launch
-            val key = normalizeLanguage(raw)
-            if (key.isBlank()) return@launch
-
-            val prefs = context.settingsDataStore.data.first()
-            val json = prefs[subtitleUsageKey()]
-            val type = TypeToken.getParameterized(MutableMap::class.java, String::class.java, Int::class.javaObjectType).type
-            val map: MutableMap<String, Int> = if (!json.isNullOrBlank()) {
-                gson.fromJson(json, type)
-            } else {
-                mutableMapOf()
-            }
-
-            map[key] = (map[key] ?: 0) + 1
-            context.settingsDataStore.edit { it[subtitleUsageKey()] = gson.toJson(map) }
-        }
+        viewModelScope.launch { subtitleHelper.recordSubtitleUsage(subtitle) }
     }
 
     fun dismissError() {
@@ -1481,10 +1250,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     private data class ResumeData(
-        val positionMs: Long,
-        val streamKey: String? = null,
-        val streamAddonId: String? = null,
-        val streamTitle: String? = null
+        val positionMs: Long
     )
 
     private suspend fun resolveResumeData(
@@ -1519,57 +1285,9 @@ class PlayerViewModel @Inject constructor(
             else -> 0L
         }
 
-        val useLocalStream = localPositionMs >= cloudPositionMs && localPositionMs > 0L
-        val streamKey = if (useLocalStream) {
-            localEntry?.streamKey ?: cloudEntry?.stream_key
-        } else {
-            cloudEntry?.stream_key ?: localEntry?.streamKey
-        }
-        val streamAddonId = if (useLocalStream) {
-            localEntry?.streamAddonId ?: cloudEntry?.stream_addon_id
-        } else {
-            cloudEntry?.stream_addon_id ?: localEntry?.streamAddonId
-        }
-        val streamTitle = if (useLocalStream) {
-            localEntry?.streamTitle ?: cloudEntry?.stream_title
-        } else {
-            cloudEntry?.stream_title ?: localEntry?.streamTitle
-        }
-
-        // Guard against replaying a bad source from failed startup attempts at 00:00.
-        // Only trust persisted stream affinity when we have meaningful progress.
-        val hasMeaningfulProgress = finalPositionMs >= 30_000L
-
         return ResumeData(
-            positionMs = finalPositionMs.coerceAtLeast(0L),
-            streamKey = if (hasMeaningfulProgress) streamKey else null,
-            streamAddonId = if (hasMeaningfulProgress) streamAddonId else null,
-            streamTitle = if (hasMeaningfulProgress) streamTitle else null
+            positionMs = finalPositionMs.coerceAtLeast(0L)
         )
-    }
-
-    private fun buildStreamKey(stream: StreamSource?): String? {
-        if (stream == null) return null
-
-        val infoHash = stream.infoHash?.trim()?.lowercase().orEmpty()
-        if (infoHash.isNotBlank()) {
-            val idx = stream.fileIdx
-            return if (idx != null) "$infoHash:$idx" else infoHash
-        }
-
-        val videoHash = stream.behaviorHints?.videoHash?.trim().orEmpty()
-        if (videoHash.isNotBlank()) return "vh:$videoHash"
-
-        val filename = stream.behaviorHints?.filename?.trim().orEmpty()
-        if (filename.isNotBlank()) return "fn:${filename.lowercase()}"
-
-        val source = stream.source.trim()
-        if (source.isNotBlank()) return "src:${source.lowercase()}"
-
-        val url = stream.url?.trim().orEmpty()
-        if (url.isNotBlank()) return "url:${url.substringBefore('?').lowercase()}"
-
-        return null
     }
 
     private suspend fun computeResumePositionMs(
@@ -1611,17 +1329,17 @@ class PlayerViewModel @Inject constructor(
     ): Long {
         return try {
             if (mediaType == MediaType.MOVIE) {
-                val details = tmdbApi.getMovieDetails(mediaId, Constants.TMDB_API_KEY)
+                val details = tmdbApi.getMovieDetails(mediaId)
                 (details.runtime ?: 0) * 60L
             } else {
-                val details = tmdbApi.getTvDetails(mediaId, Constants.TMDB_API_KEY)
+                val details = tmdbApi.getTvDetails(mediaId)
                 val avgRuntime = details.episodeRunTime.firstOrNull() ?: 0
                 if (avgRuntime > 0) {
                     avgRuntime * 60L
                 } else {
                     val season = seasonNumber ?: return 0L
                     val episode = episodeNumber ?: return 0L
-                    val seasonDetails = tmdbApi.getTvSeason(mediaId, season, Constants.TMDB_API_KEY)
+                    val seasonDetails = tmdbApi.getTvSeason(mediaId, season)
                     val runtime = seasonDetails.episodes.firstOrNull { it.episodeNumber == episode }?.runtime
                         ?: seasonDetails.episodes.firstOrNull { it.runtime != null }?.runtime
                         ?: 0
@@ -1690,7 +1408,7 @@ class PlayerViewModel @Inject constructor(
                 lastScrobbleTime = currentTime
             }
 
-            // Save to Supabase watch history (debounced + on pause/stop)
+            // Save to watch history (debounced + on pause/stop)
             // Skip saving progress at watched threshold — the mark-watched block below handles
             // the next-episode CW entry, and saving the finished episode's full position here
             // would contaminate the next episode's resume time via show-level history fallback.
@@ -1699,11 +1417,6 @@ class PlayerViewModel @Inject constructor(
                 lastWatchHistorySaveTime = currentTime
                 val durationSeconds = (duration / 1000L).coerceAtLeast(1L)
                 val positionSeconds = (position / 1000L).coerceAtLeast(0L)
-                val selectedStream = _uiState.value.selectedStream
-                val shouldPersistStreamAffinity = positionSeconds >= 30L
-                val streamKey = if (shouldPersistStreamAffinity) buildStreamKey(selectedStream) else null
-                val streamAddonId = if (shouldPersistStreamAffinity) selectedStream?.addonId?.takeIf { it.isNotBlank() } else null
-                val streamTitle = if (shouldPersistStreamAffinity) selectedStream?.source?.take(200)?.takeIf { it.isNotBlank() } else null
                 watchHistoryRepository.saveProgress(
                     mediaType = currentMediaType,
                     tmdbId = currentMediaId,
@@ -1715,10 +1428,7 @@ class PlayerViewModel @Inject constructor(
                     episodeTitle = currentEpisodeTitle,
                     progress = progressFraction,
                     duration = durationSeconds,
-                    position = positionSeconds,
-                    streamKey = streamKey,
-                    streamAddonId = streamAddonId,
-                    streamTitle = streamTitle
+                    position = positionSeconds
                 )
 
                 // Also save to local Continue Watching (profile-scoped, for profiles without Trakt).
@@ -1737,15 +1447,11 @@ class PlayerViewModel @Inject constructor(
                         episodeTitle = currentEpisodeTitle,
                         progress = progressPercent,
                         positionSeconds = positionSeconds,
-                        durationSeconds = durationSeconds,
-                        streamKey = streamKey,
-                        streamAddonId = streamAddonId,
-                        streamTitle = streamTitle
+                        durationSeconds = durationSeconds
                     )
                 }
 
                 if (!isPlaying || playbackState == Player.STATE_ENDED || progressPercent >= Constants.WATCHED_THRESHOLD) {
-                    runCatching { cloudSyncRepository.pushToCloud() }
                     runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                 }
             }
@@ -1772,7 +1478,7 @@ class PlayerViewModel @Inject constructor(
                     } else if (currentMediaType == MediaType.MOVIE) {
                         traktRepository.deletePlaybackForContent(currentMediaId, currentMediaType)
                     }
-                    // Clean up Supabase history for the finished episode so its stale
+                    // Clean up history for the finished episode so its stale
                     // position doesn't resurface as a Continue Watching candidate.
                     // Retry up to 2 times if the delete fails (network flakes).
                     val deleteType = currentMediaType
@@ -1828,7 +1534,6 @@ class PlayerViewModel @Inject constructor(
                     }
                 }
 
-                runCatching { cloudSyncRepository.pushToCloud() }
                 runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
             }
 
@@ -1839,6 +1544,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     private var progressSaveJob: Job? = null
+    private var selectStreamJob: Job? = null
+    private var selectStreamRequestId = 0
     private var subtitleRefreshJob: Job? = null
     private var vodAppendJob: Job? = null
     private var streamPrewarmJob: Job? = null
@@ -1942,8 +1649,7 @@ class PlayerViewModel @Inject constructor(
                     u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
                 }
 
-            val existingVod = _uiState.value.streams.filter { it.addonId == "Playlists_xtream_vod" }
-            val mergedStreams = (allStreams + existingVod)
+            val mergedStreams = allStreams
                 .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }
 
             val selectedMatch = mergedStreams.firstOrNull { stream ->

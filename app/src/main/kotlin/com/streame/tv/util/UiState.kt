@@ -58,7 +58,7 @@ sealed class UiState<out T> {
     ) : UiState<Nothing>() {
         val message: String get() = exception.message
         val errorCode: String? get() = exception.errorCode
-        val isRetryable: Boolean get() = exception.isRetryable()
+        val isRetryable: Boolean get() = exception.isRetryable
     }
 
     /**

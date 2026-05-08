@@ -1,4 +1,4 @@
-﻿package com.streame.tv.ui.screens.settings
+package com.streame.tv.ui.screens.settings
 
 import android.text.InputType
 import android.text.method.PasswordTransformationMethod
@@ -228,7 +228,6 @@ private fun Modifier.settingsFocusSlot(index: Int): Modifier {
 fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     currentProfile: com.streame.tv.data.model.Profile? = null,
-    autoStartCloudAuth: Boolean = false,
     onNavigateToHome: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
     onNavigateToWatchlist: () -> Unit = {},
@@ -239,17 +238,6 @@ fun SettingsScreen(
     val isTouchDevice = LocalDeviceType.current.isTouchDevice()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
-    // Auto-start cloud auth if requested (e.g. from profile selection page)
-    LaunchedEffect(autoStartCloudAuth) {
-        if (autoStartCloudAuth && !uiState.isLoggedIn) {
-            if (isTouchDevice) {
-                viewModel.openCloudEmailPasswordDialog()
-            } else {
-                viewModel.startCloudAuth()
-            }
-        }
-    }
 
     var isSidebarFocused by remember { mutableStateOf(false) }
     val hasProfile = currentProfile != null
@@ -483,23 +471,6 @@ fun SettingsScreen(
         }
     }
 
-    var cloudDialogEmail by remember { mutableStateOf("") }
-    var cloudDialogPassword by remember { mutableStateOf("") }
-
-    LaunchedEffect(uiState.showCloudEmailPasswordDialog) {
-        if (uiState.showCloudEmailPasswordDialog) {
-            cloudDialogEmail = ""
-            cloudDialogPassword = ""
-        }
-    }
-
-    LaunchedEffect(uiState.shouldSwitchProfile) {
-        if (uiState.shouldSwitchProfile) {
-            viewModel.onCloudProfileSwitchHandled()
-            onSwitchProfile()
-        }
-    }
-
     val hasBlockingModal =
         showCustomAddonInput ||
         showCloudstreamRepoInput ||
@@ -511,8 +482,6 @@ fun SettingsScreen(
         showDnsProviderPicker ||
         showContentLanguagePicker ||
         showUiModeWarningDialog ||
-        uiState.showCloudPairDialog ||
-        uiState.showCloudEmailPasswordDialog ||
         uiState.traktCode != null ||
         uiState.showAppUpdateDialog ||
         uiState.showUnknownSourcesDialog ||
@@ -784,13 +753,6 @@ fun SettingsScreen(
                                         "accounts" -> {
                                             when (contentFocusIndex) {
                                                 0 -> {
-                                                    if (uiState.isLoggedIn) {
-                                                        viewModel.logout()
-                                                    } else {
-                                                        viewModel.startCloudAuth()
-                                                    }
-                                                }
-                                                1 -> {
                                                     if (uiState.isTraktAuthenticated) {
                                                         viewModel.disconnectTrakt()
                                                     } else if (uiState.isTraktPolling) {
@@ -799,10 +761,7 @@ fun SettingsScreen(
                                                         viewModel.startTraktAuth()
                                                     }
                                                 }
-                                                2 -> {
-                                                    viewModel.forceCloudSyncNow()
-                                                }
-                                                3 -> {
+                                                1 -> {
                                                     if (uiState.downloadedApkPath != null) {
                                                         viewModel.installAppUpdateOrRequestPermission()
                                                     } else {
@@ -1023,33 +982,20 @@ fun SettingsScreen(
                             onAddRepository = { showCloudstreamRepoInput = true }
                         )
                         "accounts" -> AccountsSettings(
-                            isCloudAuthenticated = uiState.isLoggedIn,
-                            cloudEmail = uiState.accountEmail,
-                            cloudHint = null,
                             isTraktAuthenticated = uiState.isTraktAuthenticated,
                             traktCode = uiState.traktCode?.userCode,
                             traktUrl = uiState.traktCode?.verificationUrl,
                             isTraktAuthStarting = uiState.isTraktAuthStarting,
                             isTraktPolling = uiState.isTraktPolling,
-                            isForceCloudSyncing = uiState.isForceCloudSyncing,
                             isSelfUpdateSupported = uiState.isSelfUpdateSupported,
                             isCheckingForUpdate = uiState.isCheckingForUpdate,
                             isAppUpdateAvailable = uiState.isAppUpdateAvailable,
                             availableAppUpdate = uiState.availableAppUpdate,
                             downloadedApkPath = uiState.downloadedApkPath,
                             focusedIndex = if (activeZone == Zone.CONTENT) contentFocusIndex else -1,
-                            onConnectCloud = {
-                                if (isTouchDevice) {
-                                    viewModel.openCloudEmailPasswordDialog()
-                                } else {
-                                    viewModel.startCloudAuth()
-                                }
-                            },
-                            onDisconnectCloud = { viewModel.logout() },
                             onConnectTrakt = { viewModel.startTraktAuth() },
                             onCancelTrakt = { viewModel.cancelTraktAuth() },
                             onDisconnectTrakt = { viewModel.disconnectTrakt() },
-                            onForceCloudSync = { viewModel.forceCloudSyncNow() },
                             onSwitchProfile = onSwitchProfile,
                             onCheckUpdates = { viewModel.checkForAppUpdates(force = true, showNoUpdateFeedback = true) },
                             onInstallUpdate = { viewModel.installAppUpdateOrRequestPermission() }
@@ -1277,28 +1223,6 @@ fun SettingsScreen(
                     showContentLanguagePicker = false
                 },
                 onDismiss = { showContentLanguagePicker = false }
-            )
-        }
-
-        if (uiState.showCloudEmailPasswordDialog) {
-            CloudEmailPasswordModal(
-                email = cloudDialogEmail,
-                password = cloudDialogPassword,
-                onEmailChange = { cloudDialogEmail = it },
-                onPasswordChange = { cloudDialogPassword = it },
-                onDismiss = { viewModel.closeCloudEmailPasswordDialog() },
-                onSignIn = { viewModel.completeCloudAuthWithEmailPassword(cloudDialogEmail, cloudDialogPassword, createAccount = false) },
-                onCreateAccount = { viewModel.completeCloudAuthWithEmailPassword(cloudDialogEmail, cloudDialogPassword, createAccount = true) }
-            )
-        }
-
-        if (uiState.showCloudPairDialog) {
-            CloudPairModal(
-                verificationUrl = uiState.cloudVerificationUrl.orEmpty(),
-                userCode = uiState.cloudUserCode.orEmpty(),
-                isWorking = uiState.isCloudAuthWorking,
-                onDismiss = { viewModel.cancelCloudAuth() },
-                onUseEmailPassword = { viewModel.openCloudEmailPasswordDialog() }
             )
         }
 
@@ -1729,554 +1653,6 @@ private fun QualityFilterEditorModal(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun CloudEmailPasswordModal(
-    email: String,
-    password: String,
-    onEmailChange: (String) -> Unit,
-    onPasswordChange: (String) -> Unit,
-    onDismiss: () -> Unit,
-    onSignIn: () -> Unit,
-    onCreateAccount: () -> Unit
-) {
-    // Focus order: 0 email, 1 password, 2 cancel, 3 sign in, 4 create
-    var focusedIndex by remember { mutableIntStateOf(0) }
-    val emailRequester = remember { FocusRequester() }
-    val passwordRequester = remember { FocusRequester() }
-
-    LaunchedEffect(Unit) { emailRequester.requestFocus() }
-    LaunchedEffect(focusedIndex) {
-        when (focusedIndex) {
-            0 -> emailRequester.requestFocus()
-            1 -> passwordRequester.requestFocus()
-        }
-    }
-
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = true,
-            usePlatformDefaultWidth = false
-        )
-    ) {
-        ModalScrim(onDismiss = onDismiss) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth(if (LocalDeviceType.current.isTouchDevice()) 0.92f else 1f)
-                    .widthIn(max = 600.dp)
-                    .background(BackgroundElevated, RoundedCornerShape(16.dp))
-                    .padding(if (LocalDeviceType.current.isTouchDevice()) 20.dp else 32.dp)
-                    .onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown) {
-                            when (event.key) {
-                                Key.Back, Key.Escape -> {
-                                    onDismiss()
-                                    true
-                                }
-                                Key.DirectionUp -> {
-                                    focusedIndex = when (focusedIndex) {
-                                        1 -> 0
-                                        2, 3, 4 -> 1
-                                        else -> focusedIndex
-                                    }
-                                    true
-                                }
-                                Key.DirectionDown -> {
-                                    focusedIndex = when (focusedIndex) {
-                                        0 -> 1
-                                        1 -> 2
-                                        2 -> 3
-                                        else -> focusedIndex
-                                    }
-                                    true
-                                }
-                                Key.DirectionLeft -> {
-                                    focusedIndex = when (focusedIndex) {
-                                        4 -> 3
-                                        3 -> 2
-                                        else -> focusedIndex
-                                    }
-                                    true
-                                }
-                                Key.DirectionRight -> {
-                                    focusedIndex = when (focusedIndex) {
-                                        2 -> 3
-                                        3 -> 4
-                                        else -> focusedIndex
-                                    }
-                                    true
-                                }
-                                Key.Enter, Key.DirectionCenter -> {
-                                    when (focusedIndex) {
-                                        2 -> { onDismiss(); true }
-                                        3 -> { onSignIn(); true }
-                                        4 -> { onCreateAccount(); true }
-                                        else -> false
-                                    }
-                                }
-                                else -> false
-                            }
-                        } else false
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Streame Cloud Sign-in",
-                    style = StreameTypography.sectionTitle,
-                    color = TextPrimary,
-                    modifier = Modifier.padding(bottom = 24.dp)
-                )
-
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Email",
-                        style = StreameTypography.caption,
-                        color = if (focusedIndex == 0) Pink else TextSecondary,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    androidx.compose.material3.TextField(
-                        value = email,
-                        onValueChange = onEmailChange,
-                        singleLine = true,
-                        textStyle = StreameTypography.body.copy(color = TextPrimary),
-                        colors = androidx.compose.material3.TextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedContainerColor = Color.White.copy(alpha = 0.1f),
-                            unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
-                            focusedIndicatorColor = Pink,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            cursorColor = Pink
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(emailRequester)
-                            .border(
-                                width = if (focusedIndex == 0) 2.dp else 1.dp,
-                                color = if (focusedIndex == 0) Pink else Color.White.copy(alpha = 0.2f),
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Password",
-                        style = StreameTypography.caption,
-                        color = if (focusedIndex == 1) Pink else TextSecondary,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    androidx.compose.material3.TextField(
-                        value = password,
-                        onValueChange = onPasswordChange,
-                        singleLine = true,
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                        textStyle = StreameTypography.body.copy(color = TextPrimary),
-                        colors = androidx.compose.material3.TextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedContainerColor = Color.White.copy(alpha = 0.1f),
-                            unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
-                            focusedIndicatorColor = Pink,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            cursorColor = Pink
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(passwordRequester)
-                            .border(
-                                width = if (focusedIndex == 1) 2.dp else 1.dp,
-                                color = if (focusedIndex == 1) Pink else Color.White.copy(alpha = 0.2f),
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    val isCancelFocused = focusedIndex == 2
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                color = if (isCancelFocused) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f)
-                            )
-                            .clickable { onDismiss() }
-                            .border(
-                                width = if (isCancelFocused) 2.dp else 0.dp,
-                                color = if (isCancelFocused) Pink else Color.Transparent,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .padding(vertical = 14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Cancel",
-                            style = StreameTypography.button,
-                            color = if (isCancelFocused) TextPrimary else TextSecondary
-                        )
-                    }
-
-                    val isSignInFocused = focusedIndex == 3
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                color = if (isSignInFocused) SuccessGreen else Pink.copy(alpha = 0.6f)
-                            )
-                            .clickable { onSignIn() }
-                            .border(
-                                width = if (isSignInFocused) 2.dp else 0.dp,
-                                color = if (isSignInFocused) SuccessGreen.copy(alpha = 0.5f) else Color.Transparent,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .padding(vertical = 14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Sign In",
-                            style = StreameTypography.button,
-                            color = if (isSignInFocused) Color.White else Color.Black
-                        )
-                    }
-
-                    val isCreateFocused = focusedIndex == 4
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                color = if (isCreateFocused) SuccessGreen else Color.White.copy(alpha = 0.08f)
-                            )
-                            .clickable { onCreateAccount() }
-                            .border(
-                                width = if (isCreateFocused) 2.dp else 0.dp,
-                                color = if (isCreateFocused) SuccessGreen.copy(alpha = 0.5f) else Color.Transparent,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .padding(vertical = 14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Create",
-                            style = StreameTypography.button,
-                            color = Color.White
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = if (LocalDeviceType.current.isTouchDevice()) "Enter your email and password to sign in." else "Tip: Use TV keyboard. D-pad to navigate.",
-                    style = StreameTypography.caption,
-                    color = TextSecondary.copy(alpha = 0.5f)
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun CloudPairModal(
-    verificationUrl: String,
-    userCode: String,
-    isWorking: Boolean,
-    onDismiss: () -> Unit,
-    onUseEmailPassword: () -> Unit,
-) {
-    val effectiveVerificationUrl = remember(verificationUrl, userCode) {
-        verificationUrl.ifBlank {
-            userCode.takeIf { it.isNotBlank() }?.let { code ->
-                "https://auth.Streame.tv/?code=$code"
-            }.orEmpty()
-        }
-    }
-    // Focus order: 0 cancel, 1 email/password
-    var focusedIndex by remember { mutableIntStateOf(1) }
-
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = true,
-            usePlatformDefaultWidth = false
-        )
-    ) {
-        val isMobile = LocalDeviceType.current.isTouchDevice()
-        ModalScrim(onDismiss = onDismiss) {
-            BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            val modalWidth = if (isMobile) maxWidth else (maxWidth * 0.62f).coerceIn(520.dp, 760.dp)
-            val qrContainerSize = (modalWidth * 0.42f).coerceIn(190.dp, 260.dp)
-            val qrBitmapSizePx = ((qrContainerSize.value * 3.2f).toInt()).coerceIn(512, 900)
-
-            Column(
-                modifier = Modifier
-                    .then(
-                        if (isMobile) Modifier.fillMaxWidth(0.92f).widthIn(max = 600.dp)
-                        else Modifier.widthIn(max = modalWidth).fillMaxWidth(0.62f)
-                    )
-                    .background(BackgroundElevated, RoundedCornerShape(16.dp))
-                    .padding(horizontal = if (isMobile) 20.dp else 24.dp, vertical = if (isMobile) 24.dp else 20.dp)
-                    .onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown) {
-                            when (event.key) {
-                                Key.Back, Key.Escape -> {
-                                    onDismiss()
-                                    true
-                                }
-                                Key.DirectionLeft -> {
-                                    focusedIndex = 0
-                                    true
-                                }
-                                Key.DirectionRight -> {
-                                    focusedIndex = 1
-                                    true
-                                }
-                                Key.Enter, Key.DirectionCenter -> {
-                                    when (focusedIndex) {
-                                        0 -> { onDismiss(); true }
-                                        1 -> { onUseEmailPassword(); true }
-                                        else -> false
-                                    }
-                                }
-                                else -> false
-                            }
-                        } else false
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Streame Cloud Pairing",
-                    style = StreameTypography.sectionTitle,
-                    color = TextPrimary,
-                    modifier = Modifier.padding(bottom = 10.dp)
-                )
-
-                if (isMobile) {
-                    // On mobile, skip QR (can't scan own screen) and prompt email/password
-                    Text(
-                        text = "Sign in with your email and password to link this device.",
-                        style = StreameTypography.body,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                } else {
-                    Text(
-                        text = "Scan this QR code to sign in and link this TV.",
-                        style = StreameTypography.body,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                }
-
-                // QR code section - only shown on TV (phones can't scan their own screen)
-                if (!isMobile && effectiveVerificationUrl.isNotBlank()) {
-                    Box(
-                        modifier = Modifier
-                            .size(qrContainerSize)
-                            .background(BackgroundDark.copy(alpha = 0.92f), RoundedCornerShape(16.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                            .padding(12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color.White)
-                                .padding(10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            QrCodeImage(
-                                data = effectiveVerificationUrl,
-                                sizePx = qrBitmapSizePx,
-                                modifier = Modifier.fillMaxSize(),
-                                foreground = android.graphics.Color.BLACK,
-                                background = android.graphics.Color.WHITE,
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                if (userCode.isNotBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentPaste,
-                            contentDescription = null,
-                            tint = TextSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Code: $userCode",
-                            style = StreameTypography.body,
-                            color = TextPrimary
-                        )
-                    }
-                }
-
-                if (isWorking) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LoadingIndicator(size = 20.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Waiting for approval...",
-                            style = StreameTypography.body,
-                            color = TextSecondary
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                if (isMobile) {
-                    // On mobile, show "Use Email/Password" prominently as the primary action
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    color = SuccessGreen,
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .clickable { onUseEmailPassword() }
-                                .padding(vertical = 14.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Link,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Use Email & Password",
-                                    style = StreameTypography.button,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    color = Color.White.copy(alpha = 0.1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .clickable { onDismiss() }
-                                .padding(vertical = 12.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "Cancel",
-                                style = StreameTypography.button,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        val isCancelFocused = focusedIndex == 0
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    color = if (isCancelFocused) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .border(
-                                    width = if (isCancelFocused) 2.dp else 0.dp,
-                                    color = if (isCancelFocused) Pink else Color.Transparent,
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .clickable { onDismiss() }
-                                .padding(vertical = 12.dp, horizontal = 14.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.LinkOff,
-                                    contentDescription = null,
-                                    tint = if (isCancelFocused) TextPrimary else TextSecondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Cancel",
-                                    style = StreameTypography.button,
-                                    color = if (isCancelFocused) TextPrimary else TextSecondary
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        val isFallbackFocused = focusedIndex == 1
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    color = if (isFallbackFocused) SuccessGreen else Pink.copy(alpha = 0.6f),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .border(
-                                    width = if (isFallbackFocused) 2.dp else 0.dp,
-                                    color = if (isFallbackFocused) SuccessGreen.copy(alpha = 0.5f) else Color.Transparent,
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .clickable { onUseEmailPassword() }
-                                .padding(vertical = 12.dp, horizontal = 14.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Link,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Use Email/Password",
-                                    style = StreameTypography.button,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
 private fun TraktActivationModal(
     verificationUrl: String,
     userCode: String,
@@ -2443,14 +1819,6 @@ private fun MobileSettingsLayout(
                     color = TextPrimary,
                     modifier = Modifier.weight(1f)
                 )
-                if (uiState.isLoggedIn) {
-                    Text(
-                        text = stringResource(R.string.log_out),
-                        style = StreameTypography.button,
-                        color = Pink,
-                        modifier = Modifier.clickable { viewModel.logout() }.padding(8.dp)
-                    )
-                }
             }
             MobileSettingsMainPage(
                 uiState = uiState,
@@ -2593,31 +1961,13 @@ private fun MobileSettingsMainPage(
 
         item {
             MobileSettingsCategory(title = "USER INFO & ACCOUNT") {
-                if (uiState.isLoggedIn) {
-                    MobileSettingsRow(
-                        icon = Icons.Default.Person,
-                        title = stringResource(R.string.cloud_account),
-                        subtitle = uiState.accountEmail ?: "",
-                        value = "Force Sync",
-                        isFocused = false,
-                        onClick = { viewModel.forceCloudSyncNow() }
-                    )
-                    MobileSettingsRow(
-                        icon = Icons.Default.SwitchAccount,
-                        title = stringResource(R.string.switch_profile),
-                        value = "",
-                        isFocused = false,
-                        onClick = onSwitchProfile
-                    )
-                } else {
-                    MobileSettingsRow(
-                        icon = Icons.Default.Person,
-                        title = stringResource(R.string.cloud_account),
-                        value = "Sign In",
-                        isFocused = false,
-                        onClick = { viewModel.openCloudEmailPasswordDialog() }
-                    )
-                }
+                MobileSettingsRow(
+                    icon = Icons.Default.SwitchAccount,
+                    title = stringResource(R.string.switch_profile),
+                    value = "",
+                    isFocused = false,
+                    onClick = onSwitchProfile
+                )
                 MobileSettingsRow(
                     icon = Icons.Default.Movie,
                     title = stringResource(R.string.trakt_account),
@@ -5903,27 +5253,20 @@ private fun CloudstreamPluginPickerModal(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun AccountsSettings(
-    isCloudAuthenticated: Boolean,
-    cloudEmail: String?,
-    cloudHint: String?,
     isTraktAuthenticated: Boolean,
     traktCode: String?,
     traktUrl: String?,
     isTraktAuthStarting: Boolean,
     isTraktPolling: Boolean,
-    isForceCloudSyncing: Boolean,
     isSelfUpdateSupported: Boolean,
     isCheckingForUpdate: Boolean,
     isAppUpdateAvailable: Boolean,
     availableAppUpdate: com.streame.tv.updater.AppUpdate?,
     downloadedApkPath: String?,
     focusedIndex: Int,
-    onConnectCloud: () -> Unit,
-    onDisconnectCloud: () -> Unit,
     onConnectTrakt: () -> Unit,
     onCancelTrakt: () -> Unit,
     onDisconnectTrakt: () -> Unit,
-    onForceCloudSync: () -> Unit,
     onSwitchProfile: () -> Unit,
     onCheckUpdates: () -> Unit,
     onInstallUpdate: () -> Unit
@@ -5936,24 +5279,6 @@ private fun AccountsSettings(
             modifier = Modifier.padding(bottom = 24.dp)
         )
 
-        AccountRow(
-            name = "Streame Cloud",
-            description = "Sync settings and watchlist across devices",
-            isConnected = isCloudAuthenticated,
-            isWorking = false,
-            authCode = null,
-            authUrl = null,
-            isFocused = focusedIndex == 0,
-            onConnect = {
-                onConnectCloud()
-            },
-            onDisconnect = onDisconnectCloud,
-            modifier = Modifier.settingsFocusSlot(0),
-            expirationText = cloudHint
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
         // Trakt.tv
         AccountRow(
             name = "Trakt.tv",
@@ -5962,28 +5287,11 @@ private fun AccountsSettings(
             isWorking = isTraktAuthStarting || isTraktPolling,
             authCode = traktCode,
             authUrl = traktUrl,
-            isFocused = focusedIndex == 1,
+            isFocused = focusedIndex == 0,
             onConnect = { if (isTraktPolling) onCancelTrakt() else onConnectTrakt() },
             onDisconnect = onDisconnectTrakt,
-            modifier = Modifier.settingsFocusSlot(1),
+            modifier = Modifier.settingsFocusSlot(0),
             expirationText = null  // Don't show expiration - Trakt tokens auto-refresh
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        SettingsActionRow(
-            title = stringResource(R.string.force_cloud_sync),
-            description = if (isForceCloudSyncing) {
-                "Syncing local and cloud state now"
-            } else if (isCloudAuthenticated) {
-                "Upload local state, then restore from cloud now"
-            } else {
-                "Sign in to Streame Cloud to force sync"
-            },
-            actionLabel = if (isForceCloudSyncing) "SYNCING" else "SYNC",
-            isFocused = focusedIndex == 2,
-            onClick = { if (!isForceCloudSyncing) onForceCloudSync() },
-            modifier = Modifier.settingsFocusSlot(2)
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -6005,11 +5313,11 @@ private fun AccountsSettings(
                 isAppUpdateAvailable -> "UPDATE"
                 else -> "CHECK"
             },
-            isFocused = focusedIndex == 3,
+            isFocused = focusedIndex == 1,
             onClick = {
                 if (downloadedApkPath != null) onInstallUpdate() else onCheckUpdates()
             },
-            modifier = Modifier.settingsFocusSlot(3)
+            modifier = Modifier.settingsFocusSlot(1)
         )
     }
 }
@@ -6845,10 +6153,7 @@ private fun InputModal(
 
                                             val isPasswordField = field.isSecret || field.label.contains("password", ignoreCase = true)
                                             val isLikelyUrlField =
-                                                field.label.contains("url", ignoreCase = true) ||
-                                                    field.label.contains("m3u", ignoreCase = true) ||
-                                                    field.label.contains("epg", ignoreCase = true) ||
-                                                    field.label.contains("server", ignoreCase = true)
+                                                field.label.contains("url", ignoreCase = true)
                                             inputType = if (isPasswordField) {
                                                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                                             } else if (isLikelyUrlField) {

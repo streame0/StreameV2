@@ -339,6 +339,7 @@ fun PlayerScreen(
     var startupSameSourceRefreshAttempted by remember { mutableStateOf(false) }
     var startupUrlLock by remember { mutableStateOf<String?>(null) }
     var dvStartupFallbackStage by remember { mutableIntStateOf(0) } // 0=none, 1=HEVC forced, 2=AVC forced
+    var failedAudioMime by remember { mutableStateOf<String?>(null) } // e.g. "audio/eac3" when decoder init fails
     var midPlaybackRecoveryAttempts by remember { mutableIntStateOf(0) }
     var blackVideoRecoveryStage by remember { mutableIntStateOf(0) } // 0=none, 1=HEVC forced, 2=AVC forced
     var blackVideoReadySinceMs by remember { mutableStateOf<Long?>(null) }
@@ -363,6 +364,7 @@ fun PlayerScreen(
         startupSameSourceRefreshAttempted = false
         startupUrlLock = null
         dvStartupFallbackStage = 0
+        failedAudioMime = null
         rebufferRecoverAttempted = false
         longRebufferCount = 0
         autoAdvanceAttempts = 0
@@ -414,6 +416,7 @@ fun PlayerScreen(
                 startupSameSourceRefreshAttempted = false
                 startupUrlLock = null
                 dvStartupFallbackStage = 0
+                failedAudioMime = null
                 rebufferRecoverAttempted = false
                 longRebufferCount = 0
                 isAutoAdvancing = true
@@ -507,7 +510,11 @@ fun PlayerScreen(
             // Configure track selection for maximum compatibility
             .setTrackSelector(
                 androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context).apply {
-                    parameters = buildUponParameters()
+                    // On phones/tablets, limit video to 1080p to avoid repeated
+                    // NO_MEMORY / configureCodec error -12 on 4K HEVC streams.
+                    // Android TV devices typically have hardware DV/4K decoders and don't need this.
+                    val isTv = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+                    val paramsBuilder = buildUponParameters()
                         // Prefer original audio language when available
                         .setPreferredAudioLanguage(uiState.preferredAudioLanguage)
                         // Allow decoder fallback for unsupported codecs
@@ -515,15 +522,21 @@ fun PlayerScreen(
                         .setAllowVideoNonSeamlessAdaptiveness(true)
                         // Allow any audio/video codec combination
                         .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                        // Allow switching between stereo/surround/multichannel audio tracks
+                        .setAllowAudioNonSeamlessAdaptiveness(true)
+                        .setAllowAudioMixedChannelCountAdaptiveness(true)
                         // Disable HDR requirement - play HDR as SDR if needed
                         .setForceLowestBitrate(false)
-                        // DV-first compatibility path:
+                        // DV-first compatibility path (mainly for Android TV):
                         // allow selector to exceed strict reported caps when needed,
                         // because many Android TV devices under-report DV profile support.
-                        .setExceedVideoConstraintsIfNecessary(true)
-                        .setExceedAudioConstraintsIfNecessary(true)
-                        .setExceedRendererCapabilitiesIfNecessary(true)
-                        .build()
+                        .setExceedVideoConstraintsIfNecessary(isTv)
+                        // On phones, don't select audio tracks that exceed device capabilities
+                        // (e.g. E-AC3/Dolby Digital Plus on devices without hardware decoder).
+                        // TVs typically have E-AC3 decoders and need this set to true.
+                        .setExceedAudioConstraintsIfNecessary(isTv)
+                        .setExceedRendererCapabilitiesIfNecessary(isTv)
+                    parameters = paramsBuilder.build()
                 }
             )
             .setAudioAttributes(
@@ -537,6 +550,16 @@ fun PlayerScreen(
             .build().apply {
                 // Ensure volume is at maximum
                 volume = 1.0f
+
+                // On phones/tablets, cap video at 1080p to prevent 4K HEVC decode failures
+                // (NO_MEMORY / configureCodec error -12). Android TV devices have hardware
+                // DV/4K decoders and don't need this cap.
+                val isTv = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+                if (!isTv) {
+                    trackSelectionParameters = trackSelectionParameters.buildUpon()
+                        .setMaxVideoSize(1920, 1080)
+                        .build()
+                }
 
                 // Add error listener to try next stream on codec errors
                 addListener(object : Player.Listener {
@@ -605,6 +628,39 @@ fun PlayerScreen(
                             error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_TIMEOUT
 
                         if (isSourceError) {
+                            // Handle audio decoder failures (e.g. E-AC3 on phones without hardware decoder)
+                            // by recording the failed MIME type so onTracksChanged can force-select
+                            // a supported audio track on the next prepare cycle.
+                            val isAudioDecoderError = error is androidx.media3.exoplayer.ExoPlaybackException
+                                    && error.type == androidx.media3.exoplayer.ExoPlaybackException.TYPE_RENDERER
+                                    && error.rendererIndex == 1 // audio renderer index
+                            if (isAudioDecoderError && !hasPlaybackStarted) {
+                                val failedFormat = (error as? androidx.media3.exoplayer.ExoPlaybackException)
+                                    ?.rendererFormat
+                                val failedMime = failedFormat?.sampleMimeType
+                                if (!failedMime.isNullOrBlank()) {
+                                    android.util.Log.w("PlayerScreen", "Audio decoder failed for mime=$failedMime — will force supported track on retry")
+                                    failedAudioMime = failedMime
+                                    val selector = this@apply.trackSelector as? androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+                                    val isTv = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+                                    selector?.let {
+                                        it.parameters = it.buildUponParameters()
+                                            .setPreferredAudioLanguage(latestUiState.preferredAudioLanguage)
+                                            .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                                            .setAllowAudioNonSeamlessAdaptiveness(true)
+                                            .setAllowAudioMixedChannelCountAdaptiveness(true)
+                                            .setExceedAudioConstraintsIfNecessary(isTv)
+                                            .setExceedRendererCapabilitiesIfNecessary(isTv)
+                                            .build()
+                                    }
+                                    val keepPlaying = this@apply.playWhenReady
+                                    this@apply.stop()
+                                    this@apply.prepare()
+                                    this@apply.playWhenReady = keepPlaying
+                                    return
+                                }
+                            }
+
                             val sourceLikelyDv = isLikelyDolbyVisionStream(latestUiState.selectedStream)
                             if (!hasPlaybackStarted && sourceLikelyDv && dvStartupFallbackStage < 2) {
                                 val selector = this@apply.trackSelector as? androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -618,6 +674,14 @@ fun PlayerScreen(
                                         .setPreferredVideoMimeType(preferredMime)
                                         .setExceedRendererCapabilitiesIfNecessary(true)
                                         .setExceedVideoConstraintsIfNecessary(true)
+                                        // Preserve audio selection so the re-prepare doesn't lose audio
+                                        .setPreferredAudioLanguage(latestUiState.preferredAudioLanguage)
+                                        .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                                        .setAllowAudioNonSeamlessAdaptiveness(true)
+                                        .setAllowAudioMixedChannelCountAdaptiveness(true)
+                                        .setExceedAudioConstraintsIfNecessary(
+                                            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+                                        )
                                         .build()
                                 }
                                 dvStartupFallbackStage += 1
@@ -639,6 +703,9 @@ fun PlayerScreen(
                                     "timeout" in timeoutMessage ||
                                     "timed out" in timeoutMessage ||
                                     "sockettimeout" in timeoutMessage ||
+                                    "connection reset" in timeoutMessage ||
+                                    "connection closed" in timeoutMessage ||
+                                    "broken pipe" in timeoutMessage ||
                                     "etimedout" in timeoutMessage
 
                             // For heavy sources, retry same source first instead of failing immediately.
@@ -720,6 +787,114 @@ fun PlayerScreen(
                             }
                             if (matchingTrack != null) {
                                 selectedAudioIndex = extractedAudioTracks.indexOf(matchingTrack)
+                            }
+
+                            // If a previous audio decoder error recorded a failed MIME type,
+                            // check whether the currently selected audio track uses it.
+                            // If so, force-switch to a supported track to prevent repeated failures.
+                            val failedMime = failedAudioMime
+                            if (failedMime != null && selectedTrackIndex != null) {
+                                val selectedFormat = currentAudioGroup.getTrackFormat(selectedTrackIndex)
+                                if (selectedFormat.sampleMimeType.equals(failedMime, ignoreCase = true)) {
+                                    android.util.Log.w("PlayerScreen", "Selected audio uses failed mime=$failedMime — searching for supported alternative")
+                                    try {
+                                        val selector = this@apply.trackSelector as? androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+                                        selector?.let {
+                                            // Search ALL audio groups for a supported track
+                                            var foundSupported = false
+                                            for (group in tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }) {
+                                                for (idx in 0 until group.length) {
+                                                    val fmt = group.getTrackFormat(idx)
+                                                    val isSupported = group.isTrackSupported(idx)
+                                                    val isFailedMime = fmt.sampleMimeType.equals(failedMime, ignoreCase = true)
+                                                    if (isSupported && !isFailedMime) {
+                                                        // Prefer language match among supported tracks
+                                                        val langMatch = !fmt.language.isNullOrBlank() &&
+                                                            fmt.language.equals(latestUiState.preferredAudioLanguage, ignoreCase = true)
+                                                        if (langMatch || !foundSupported) {
+                                                            val paramsBuilder = it.buildUponParameters()
+                                                                .setPreferredAudioLanguage(latestUiState.preferredAudioLanguage)
+                                                                .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                                                                .setAllowAudioNonSeamlessAdaptiveness(true)
+                                                                .setAllowAudioMixedChannelCountAdaptiveness(true)
+                                                                .setExceedAudioConstraintsIfNecessary(false)
+                                                                .setExceedRendererCapabilitiesIfNecessary(false)
+                                                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                                                .setOverrideForType(
+                                                                    TrackSelectionOverride(group.mediaTrackGroup, idx)
+                                                                )
+                                                            it.parameters = paramsBuilder.build()
+                                                            android.util.Log.i("PlayerScreen", "Switched to supported audio: mime=${fmt.sampleMimeType} lang=${fmt.language}")
+                                                            foundSupported = true
+                                                            if (langMatch) break // best match found
+                                                        }
+                                                    }
+                                                }
+                                                if (foundSupported) break
+                                            }
+                                            if (!foundSupported) {
+                                                // No supported audio track at all — try next stream source
+                                                android.util.Log.w("PlayerScreen", "No supported audio track available (all use failed mime=$failedMime) — advancing to next stream")
+                                                failedAudioMime = null
+                                                if (allowStartupSourceFallback && tryAdvanceToNextStream()) {
+                                                    return
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("PlayerScreen", "Failed to switch from unsupported audio", e)
+                                    }
+                                }
+                            }
+                        } else if (extractedAudioTracks.isNotEmpty()) {
+                            // Audio tracks exist but none are selected — this happens after
+                            // DV video fallback recovery (stop/re-prepare) leaves the audio
+                            // renderer unselected. Force selection of the best audio track.
+                            android.util.Log.w("PlayerScreen", "No audio track selected despite ${extractedAudioTracks.size} available — forcing selection")
+                            try {
+                                val selector = this@apply.trackSelector as? androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+                                val currentTrackGroups = this@apply.currentTracks.groups
+                                val isTv = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+                                selector?.let {
+                                    val paramsBuilder = it.buildUponParameters()
+                                        .setPreferredAudioLanguage(latestUiState.preferredAudioLanguage)
+                                        .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                                        .setAllowAudioNonSeamlessAdaptiveness(true)
+                                        .setAllowAudioMixedChannelCountAdaptiveness(true)
+                                        // On phones, don't select audio tracks that exceed capabilities
+                                        // (e.g. E-AC3 on devices without hardware decoder)
+                                        .setExceedAudioConstraintsIfNecessary(isTv)
+                                        .setExceedRendererCapabilitiesIfNecessary(isTv)
+                                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+
+                                    // Find the first audio group with a track the device can decode
+                                    // Prefer: language match + supported codec > language match > supported codec > first track
+                                    val audioGroup = currentTrackGroups.firstOrNull { group ->
+                                        group.type == C.TRACK_TYPE_AUDIO
+                                    }
+                                    if (audioGroup != null && audioGroup.length > 0) {
+                                        // Try to find a track that matches preferred language AND is supported
+                                        val bestTrackIndex = (0 until audioGroup.length)
+                                            .firstOrNull { idx ->
+                                                val format = audioGroup.getTrackFormat(idx)
+                                                val lang = format.language
+                                                val supported = audioGroup.isTrackSupported(idx)
+                                                !lang.isNullOrBlank() && lang.equals(latestUiState.preferredAudioLanguage, ignoreCase = true) && supported
+                                            }
+                                            // Fallback: any supported track
+                                            ?: (0 until audioGroup.length)
+                                                .firstOrNull { idx -> audioGroup.isTrackSupported(idx) }
+                                            // Last resort: first track (may fail on phones with E-AC3 only)
+                                            ?: 0
+                                        paramsBuilder.setOverrideForType(
+                                            TrackSelectionOverride(audioGroup.mediaTrackGroup, bestTrackIndex)
+                                        )
+                                        android.util.Log.i("PlayerScreen", "Forced audio track: group=${currentTrackGroups.indexOf(audioGroup)} track=$bestTrackIndex")
+                                    }
+                                    it.parameters = paramsBuilder.build()
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("PlayerScreen", "Failed to force audio track selection", e)
                             }
                         }
                         
@@ -911,6 +1086,7 @@ fun PlayerScreen(
                 startupSameSourceRetryCount = 0
                 startupSameSourceRefreshAttempted = false
                 dvStartupFallbackStage = 0
+                failedAudioMime = null
                 blackVideoRecoveryStage = 0
                 blackVideoReadySinceMs = null
             }
@@ -1326,6 +1502,7 @@ fun PlayerScreen(
                 exoPlayer.isPlaying
             ) {
                 hasPlaybackStarted = true
+                failedAudioMime = null
                 midPlaybackRecoveryAttempts = 0
                 val startupMs = streamSelectedTime?.let { startedAt ->
                     (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)

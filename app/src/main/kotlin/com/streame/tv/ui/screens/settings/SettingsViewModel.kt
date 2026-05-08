@@ -22,16 +22,12 @@ import com.streame.tv.data.repository.AuthState
 import com.streame.tv.data.repository.CatalogDiscoveryRepository
 import com.streame.tv.data.repository.CatalogRepository
 import com.streame.tv.data.repository.CollectionTemplateManifest
-import com.streame.tv.data.repository.CloudSyncRepository
 import com.streame.tv.data.repository.LauncherContinueWatchingRepository
 import com.streame.tv.data.repository.MediaRepository
 import com.streame.tv.data.repository.ProfileManager
 import com.streame.tv.data.repository.ProfileRepository
 import com.streame.tv.data.repository.StreamRepository
 import com.streame.tv.data.repository.CloudstreamRepositoryRecord
-import com.streame.tv.data.repository.TvDeviceAuthRepository
-import com.streame.tv.data.repository.TvDeviceAuthSession
-import com.streame.tv.data.repository.TvDeviceAuthStatusType
 import com.streame.tv.data.repository.TraktRepository
 import com.streame.tv.data.repository.TraktSyncService
 import com.streame.tv.data.repository.WatchlistRepository
@@ -99,15 +95,6 @@ data class SettingsUiState(
     val volumeBoostDb: Int = 0,
     val showLoadingStats: Boolean = true,
     val includeSpecials: Boolean = false,
-    val isLoggedIn: Boolean = false,
-    val accountEmail: String? = null,
-    val showCloudPairDialog: Boolean = false,
-    val cloudUserCode: String? = null,
-    val cloudVerificationUrl: String? = null,
-    val showCloudEmailPasswordDialog: Boolean = false,
-    val isCloudAuthWorking: Boolean = false,
-    val isForceCloudSyncing: Boolean = false,
-    val shouldSwitchProfile: Boolean = false,
     // Trakt
     val isTraktAuthenticated: Boolean = false,
     val traktCode: TraktDeviceCode? = null,
@@ -173,9 +160,7 @@ class SettingsViewModel @Inject constructor(
     private val watchlistRepository: WatchlistRepository,
     private val authRepository: AuthRepository,
     private val profileRepository: ProfileRepository,
-    private val tvDeviceAuthRepository: TvDeviceAuthRepository,
     private val traktSyncService: TraktSyncService,
-    private val cloudSyncRepository: CloudSyncRepository,
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
     private val appUpdateRepository: AppUpdateRepository,
     private val updatePreferences: UpdatePreferences,
@@ -233,21 +218,8 @@ class SettingsViewModel @Inject constructor(
 
     private var traktPollingJob: Job? = null
     private var catalogSearchJob: Job? = null
-    private var lastCloudSyncedUserId: String? = null
-    private var cloudDeviceCode: String? = null
-    private var cloudUserCode: String? = null
-    private var cloudVerificationUrl: String? = null
-    private var cloudPollIntervalMs: Long = 800L
-    private var cloudExpiresAtMs: Long = 0L
-    private var cloudPollingJob: Job? = null
-    private var pendingProfileSwitchAfterCloudLogin: Boolean = false
     private var observedProfileId: String? = null
 
-    private enum class CloudRestoreResult {
-        RESTORED,
-        NO_BACKUP,
-        FAILED
-    }
 
     private enum class QualityFilterPreset(
         val label: String,
@@ -292,7 +264,6 @@ class SettingsViewModel @Inject constructor(
         observeCloudstreamRepositories()
         observeTorrServer()
         observeSyncState()
-        observeAuthState()
         initializeCatalogs()
         observeCatalogs()
         initializeUpdaterState()
@@ -367,9 +338,6 @@ class SettingsViewModel @Inject constructor(
             }.getOrDefault(emptyList())
 
             // Check auth statuses
-            val authState = authRepository.authState.first()
-            val isLoggedIn = authState is AuthState.Authenticated
-            val accountEmail = (authState as? AuthState.Authenticated)?.email
             val isTrakt = traktRepository.isAuthenticated.first()
 
             // Get Trakt expiration if authenticated
@@ -406,8 +374,6 @@ class SettingsViewModel @Inject constructor(
                 secondarySubtitle = secondarySubtitle,
                 dnsProvider = dnsProviderLabel(dnsProviderValue),
                 includeSpecials = includeSpecials,
-                isLoggedIn = isLoggedIn,
-                accountEmail = accountEmail,
                 isTraktAuthenticated = isTrakt,
                 traktExpiration = traktExpiration,
                 catalogs = existingCatalogs,
@@ -596,7 +562,6 @@ class SettingsViewModel @Inject constructor(
 
             // Sync to cloud
             authRepository.saveDefaultSubtitleToProfile(language)
-            syncLocalStateToCloud(silent = true, force = true)
         }
     }
 
@@ -609,7 +574,6 @@ class SettingsViewModel @Inject constructor(
                 defaultAudioLanguage = language,
                 audioLanguageOptions = loadAudioLanguageOptions(language)
             )
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -749,7 +713,6 @@ class SettingsViewModel @Inject constructor(
 
             // Sync to cloud
             authRepository.saveAutoPlayNextToProfile(enabled)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -759,7 +722,6 @@ class SettingsViewModel @Inject constructor(
                 prefs[autoPlaySingleSourceKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(autoPlaySingleSource = enabled)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -769,7 +731,6 @@ class SettingsViewModel @Inject constructor(
                 prefs[secondarySubtitleKey()] = language
             }
             _uiState.value = _uiState.value.copy(secondarySubtitle = language)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -779,7 +740,6 @@ class SettingsViewModel @Inject constructor(
                 prefs[filterSubtitlesByLanguageKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(filterSubtitlesByLanguage = enabled)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -801,7 +761,6 @@ class SettingsViewModel @Inject constructor(
                 prefs[autoPlayMinQualityKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(autoPlayMinQuality = normalized)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -821,7 +780,6 @@ class SettingsViewModel @Inject constructor(
                 prefs[cardLayoutModeKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(cardLayoutMode = normalized)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -837,7 +795,6 @@ class SettingsViewModel @Inject constructor(
                 .edit().putString("locale_tag", lang).apply()
             mediaRepository.contentLanguage = if (lang == "en-US") null else lang
             _uiState.value = _uiState.value.copy(contentLanguage = lang)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -883,7 +840,6 @@ class SettingsViewModel @Inject constructor(
                 prefs[frameRateMatchingModeKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(frameRateMatchingMode = normalized)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -907,14 +863,13 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setTrailerAutoPlay(enabled: Boolean) {
-        viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled); syncLocalStateToCloud(silent = true) }
+        viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled) }
     }
 
     fun setShowBudget(enabled: Boolean) {
         viewModelScope.launch {
             context.settingsDataStore.edit { it[showBudgetKey()] = enabled }
             _uiState.value = _uiState.value.copy(showBudget = enabled)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -922,7 +877,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[showLoadingStatsKey()] = enabled }
             _uiState.value = _uiState.value.copy(showLoadingStats = enabled)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -931,7 +885,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[clockFormatKey()] = next }
             _uiState.value = _uiState.value.copy(clockFormat = next)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -954,18 +907,17 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[volumeBoostDbKey()] = next.toString() }
             _uiState.value = _uiState.value.copy(volumeBoostDb = next)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
     fun cycleSubtitleSize() {
         val next = when (_uiState.value.subtitleSize) { "Small" -> "Medium"; "Medium" -> "Large"; "Large" -> "Extra Large"; else -> "Small" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next); syncLocalStateToCloud(silent = true) }
+        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next) }
     }
 
     fun cycleSubtitleColor() {
         val next = when (_uiState.value.subtitleColor) { "White" -> "Yellow"; "Yellow" -> "Green"; "Green" -> "Cyan"; else -> "White" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next); syncLocalStateToCloud(silent = true) }
+        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next) }
     }
 
     private fun normalizeDnsProviderValue(raw: String?): String {
@@ -1031,7 +983,6 @@ class SettingsViewModel @Inject constructor(
                 prefs[includeSpecialsKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(includeSpecials = enabled)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -1147,7 +1098,6 @@ class SettingsViewModel @Inject constructor(
             runCatching {
                 catalogRepository.syncAddonCatalogs(addonsAfterToggle)
             }
-            syncLocalStateToCloud(silent = true)
         }
     }
     
@@ -1171,8 +1121,7 @@ class SettingsViewModel @Inject constructor(
                     },
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message?.takeIf { it.isNotBlank() } ?: "Failed to add addon",
                     toastType = ToastType.ERROR
@@ -1192,8 +1141,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Loaded ${plugins.size} Cloudstream plugins from ${manifest.name}",
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message?.takeIf { it.isNotBlank() } ?: "Failed to load Cloudstream repository",
                     toastType = ToastType.ERROR
@@ -1229,8 +1177,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Installed ${addon.name}",
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message?.takeIf { it.isNotBlank() } ?: "Failed to install Cloudstream plugin",
                     toastType = ToastType.ERROR
@@ -1248,8 +1195,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = suffix,
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message?.takeIf { it.isNotBlank() } ?: "Failed to refresh Cloudstream repository",
                     toastType = ToastType.ERROR
@@ -1267,35 +1213,6 @@ class SettingsViewModel @Inject constructor(
                 toastMessage = "Removed Cloudstream repository",
                 toastType = ToastType.SUCCESS
             )
-            syncLocalStateToCloud(silent = true)
-        }
-    }
-
-    private fun observeAuthState() {
-        viewModelScope.launch {
-            authRepository.authState.collect { state ->
-                val isLoggedIn = state is AuthState.Authenticated
-                val email = (state as? AuthState.Authenticated)?.email
-                val userId = (state as? AuthState.Authenticated)?.userId
-                _uiState.value = _uiState.value.copy(
-                    isLoggedIn = isLoggedIn,
-                    accountEmail = email
-                )
-                if (!userId.isNullOrBlank() && lastCloudSyncedUserId != userId) {
-                    lastCloudSyncedUserId = userId
-                    val restoreResult = restoreCloudStateToLocalInternal(silent = true)
-                    // Only seed cloud when there is truly no backup yet.
-                    if (restoreResult == CloudRestoreResult.NO_BACKUP) {
-                        syncLocalStateToCloud(silent = true, force = true)
-                    }
-                    if (pendingProfileSwitchAfterCloudLogin) {
-                        pendingProfileSwitchAfterCloudLogin = false
-                        _uiState.value = _uiState.value.copy(shouldSwitchProfile = true)
-                    }
-                } else if (!isLoggedIn) {
-                    lastCloudSyncedUserId = null
-                }
-            }
         }
     }
 
@@ -1331,8 +1248,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Added ${catalog.title}",
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message ?: "Failed to add catalog",
                     toastType = ToastType.ERROR
@@ -1401,8 +1317,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Added ${catalog.title}",
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message ?: "Failed to add catalog",
                     toastType = ToastType.ERROR
@@ -1419,8 +1334,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Updated ${catalog.title}",
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message ?: "Failed to update catalog",
                     toastType = ToastType.ERROR
@@ -1440,8 +1354,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Catalog removed",
                     toastType = ToastType.SUCCESS
                 )
-                syncLocalStateToCloud(silent = true)
-            }.onFailure { error ->
+                }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message ?: "Failed to remove catalog",
                     toastType = ToastType.ERROR
@@ -1454,22 +1367,19 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val success = catalogRepository.renameCatalog(catalogId, newTitle)
             if (success) {
-                syncLocalStateToCloud(silent = true)
-            }
+                }
         }
     }
 
     fun moveCatalogUp(catalogId: String) {
         viewModelScope.launch {
             catalogRepository.moveCatalogUp(catalogId)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
     fun moveCatalogDown(catalogId: String) {
         viewModelScope.launch {
             catalogRepository.moveCatalogDown(catalogId)
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -1480,7 +1390,6 @@ class SettingsViewModel @Inject constructor(
             runCatching {
                 catalogRepository.syncAddonCatalogs(addonsAfterRemove)
             }
-            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -1552,455 +1461,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun startCloudAuth() {
-        if (_uiState.value.isLoggedIn || _uiState.value.isCloudAuthWorking) return
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isCloudAuthWorking = true)
-            ensureCloudAuthSession(startPolling = true)
-                .onSuccess {
-                    _uiState.value = _uiState.value.copy(
-                        isCloudAuthWorking = false,
-                        showCloudPairDialog = true,
-                        cloudUserCode = cloudUserCode,
-                        cloudVerificationUrl = cloudVerificationUrl
-                    )
-                }
-                .onFailure { error ->
-                    clearCloudAuthSession()
-                    _uiState.value = _uiState.value.copy(
-                        isCloudAuthWorking = false,
-                        toastMessage = error.message ?: "Failed to start cloud login",
-                        toastType = ToastType.ERROR
-                    )
-                }
-        }
-    }
-
-    fun cancelCloudAuth() {
-        clearCloudAuthSession()
-        _uiState.value = _uiState.value.copy(
-            showCloudPairDialog = false,
-            cloudUserCode = null,
-            cloudVerificationUrl = null,
-            showCloudEmailPasswordDialog = false,
-            isCloudAuthWorking = false
-        )
-    }
-
-    fun openCloudEmailPasswordDialog() {
-        if (_uiState.value.isLoggedIn) return
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                showCloudPairDialog = false,
-                showCloudEmailPasswordDialog = false,
-                isCloudAuthWorking = true
-            )
-            ensureCloudAuthSession(startPolling = false)
-                .onSuccess {
-                    _uiState.value = _uiState.value.copy(
-                        showCloudPairDialog = false,
-                        showCloudEmailPasswordDialog = true,
-                        isCloudAuthWorking = false
-                    )
-                }
-                .onFailure { error ->
-                    clearCloudAuthSession()
-                    _uiState.value = _uiState.value.copy(
-                        showCloudEmailPasswordDialog = false,
-                        isCloudAuthWorking = false,
-                        toastMessage = error.message ?: "Failed to start cloud sign-in",
-                        toastType = ToastType.ERROR
-                    )
-                }
-        }
-    }
-
-    fun closeCloudEmailPasswordDialog() {
-        _uiState.value = _uiState.value.copy(showCloudEmailPasswordDialog = false)
-    }
-
-    fun completeCloudAuthWithEmailPassword(
-        email: String,
-        password: String,
-        createAccount: Boolean
-    ) {
-        val trimmedEmail = email.trim()
-        if (trimmedEmail.isBlank()) {
-            _uiState.value = _uiState.value.copy(
-                toastMessage = "Email is required",
-                toastType = ToastType.ERROR
-            )
-            return
-        }
-        if (password.isBlank()) {
-            _uiState.value = _uiState.value.copy(
-                toastMessage = "Password is required",
-                toastType = ToastType.ERROR
-            )
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isCloudAuthWorking = true)
-            val sessionReady = ensureCloudAuthSession(startPolling = false)
-            if (sessionReady.isFailure) {
-                clearCloudAuthSession()
-                _uiState.value = _uiState.value.copy(
-                    toastMessage = sessionReady.exceptionOrNull()?.message ?: "Cloud sign-in could not start. Try again.",
-                    toastType = ToastType.ERROR,
-                    isCloudAuthWorking = false
-                )
-                return@launch
-            }
-
-            val userCode = cloudUserCode
-            if (userCode.isNullOrBlank()) {
-                clearCloudAuthSession()
-                _uiState.value = _uiState.value.copy(
-                    toastMessage = "Cloud sign-in session was unavailable. Try again.",
-                    toastType = ToastType.ERROR,
-                    isCloudAuthWorking = false
-                )
-                return@launch
-            }
-
-            tvDeviceAuthRepository.completeWithEmailPassword(
-                userCode = userCode,
-                email = trimmedEmail,
-                password = password,
-                intent = if (createAccount) "signup" else "signin"
-            ).onSuccess {
-                _uiState.value = _uiState.value.copy(
-                    toastMessage = "Waiting for approval...",
-                    toastType = ToastType.INFO,
-                    showCloudEmailPasswordDialog = false,
-                    isCloudAuthWorking = true
-                )
-                startCloudPolling()
-            }.onFailure { error ->
-                _uiState.value = _uiState.value.copy(
-                    toastMessage = error.message ?: "Failed to link TV",
-                    toastType = ToastType.ERROR,
-                    isCloudAuthWorking = false
-                )
-            }
-        }
-    }
-
-    private fun startCloudPolling() {
-        val deviceCode = cloudDeviceCode ?: return
-        cloudPollingJob?.cancel()
-        cloudPollingJob = viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isCloudAuthWorking = true)
-
-            val now = System.currentTimeMillis()
-            val intervalMs = cloudPollIntervalMs.coerceIn(500L, 3_000L)
-            val hardDeadline = now + 10 * 60_000L // never poll longer than 10 minutes
-            val deadline = listOf(
-                cloudExpiresAtMs.takeIf { it > 0L } ?: (now + 60_000L),
-                hardDeadline
-            ).minOrNull() ?: hardDeadline
-
-            while (System.currentTimeMillis() < deadline) {
-                val status = tvDeviceAuthRepository.pollStatus(deviceCode).getOrNull()
-                when (status?.status) {
-                    TvDeviceAuthStatusType.PENDING -> Unit
-                    TvDeviceAuthStatusType.APPROVED -> {
-                        val access = status.accessToken
-                        val refresh = status.refreshToken
-                        if (access.isNullOrBlank() || refresh.isNullOrBlank()) {
-                            _uiState.value = _uiState.value.copy(
-                                isCloudAuthWorking = false,
-                                toastMessage = status.message ?: "Approved, but tokens were missing. Try again.",
-                                toastType = ToastType.ERROR
-                            )
-                            return@launch
-                        }
-
-                        val tokenImport = authRepository.signInWithSessionTokens(access, refresh)
-                        if (tokenImport.isSuccess) {
-                            // TV auth previously stopped at token import, relying only on
-                            // auth-state observation for restore. On slower networks/session
-                            // propagation this could fail once and never retry, leaving a
-                            // freshly signed-in device with empty addons/settings/CW.
-                            // Now with timeout protection and retry.
-                            var restoreResult = withTimeoutOrNull(15_000L) {
-                                restoreCloudStateToLocalInternal(silent = true)
-                            } ?: CloudRestoreResult.FAILED
-                            if (restoreResult == CloudRestoreResult.FAILED) {
-                                delay(1200)
-                                restoreResult = withTimeoutOrNull(15_000L) {
-                                    restoreCloudStateToLocalInternal(silent = true)
-                                } ?: CloudRestoreResult.FAILED
-                            }
-
-                            clearCloudAuthSession(cancelPolling = false)
-                            pendingProfileSwitchAfterCloudLogin = false
-                            _uiState.value = _uiState.value.copy(
-                                isCloudAuthWorking = false,
-                                showCloudPairDialog = false,
-                                showCloudEmailPasswordDialog = false,
-                                cloudUserCode = null,
-                                cloudVerificationUrl = null,
-                                shouldSwitchProfile = true,
-                                toastMessage = when (restoreResult) {
-                                    CloudRestoreResult.RESTORED -> "Signed in and restored from cloud"
-                                    CloudRestoreResult.NO_BACKUP -> "Signed in successfully"
-                                    CloudRestoreResult.FAILED -> "Signed in, but cloud restore failed"
-                                },
-                                toastType = when (restoreResult) {
-                                    CloudRestoreResult.FAILED -> ToastType.ERROR
-                                    else -> ToastType.SUCCESS
-                                }
-                            )
-                            return@launch
-                        } else {
-                            _uiState.value = _uiState.value.copy(
-                                isCloudAuthWorking = false,
-                                toastMessage = tokenImport.exceptionOrNull()?.message ?: "Failed to import session tokens",
-                                toastType = ToastType.ERROR
-                            )
-                            return@launch
-                        }
-                    }
-                    TvDeviceAuthStatusType.EXPIRED -> {
-                        _uiState.value = _uiState.value.copy(
-                            isCloudAuthWorking = false,
-                            showCloudPairDialog = false,
-                            showCloudEmailPasswordDialog = false,
-                            cloudUserCode = null,
-                            cloudVerificationUrl = null,
-                            toastMessage = status.message ?: "Cloud sign-in expired. Try again.",
-                            toastType = ToastType.ERROR
-                        )
-                        clearCloudAuthSession(cancelPolling = false)
-                        return@launch
-                    }
-                    TvDeviceAuthStatusType.ERROR -> {
-                        _uiState.value = _uiState.value.copy(
-                            isCloudAuthWorking = false,
-                            toastMessage = status.message ?: "Cloud sign-in failed. Try again.",
-                            toastType = ToastType.ERROR
-                        )
-                        return@launch
-                    }
-                    else -> Unit
-                }
-                delay(intervalMs)
-            }
-
-            _uiState.value = _uiState.value.copy(
-                isCloudAuthWorking = false,
-                toastMessage = "Sign-in did not complete. Try again.",
-                toastType = ToastType.ERROR
-            )
-            clearCloudAuthSession(cancelPolling = false)
-        }
-    }
-
-    private fun hasActiveCloudAuthSession(): Boolean {
-        val hasCodes = !cloudDeviceCode.isNullOrBlank() && !cloudUserCode.isNullOrBlank()
-        if (!hasCodes) return false
-        return cloudExpiresAtMs <= 0L || System.currentTimeMillis() < cloudExpiresAtMs
-    }
-
-    private fun applyCloudAuthSession(session: TvDeviceAuthSession) {
-        cloudDeviceCode = session.deviceCode
-        cloudUserCode = session.userCode
-        cloudVerificationUrl = session.verificationUrl
-        cloudPollIntervalMs = (session.intervalSeconds.coerceIn(1, 10) * 1000L)
-        cloudExpiresAtMs = System.currentTimeMillis() + (session.expiresInSeconds.coerceAtLeast(30) * 1000L)
-    }
-
-    private fun clearCloudAuthSession(cancelPolling: Boolean = true) {
-        cloudDeviceCode = null
-        cloudUserCode = null
-        cloudVerificationUrl = null
-        cloudPollIntervalMs = 800L
-        cloudExpiresAtMs = 0L
-        if (cancelPolling) {
-            cloudPollingJob?.cancel()
-        }
-        cloudPollingJob = null
-    }
-
-    private suspend fun ensureCloudAuthSession(startPolling: Boolean): Result<Unit> {
-        if (hasActiveCloudAuthSession()) {
-            if (startPolling && cloudPollingJob?.isActive != true) {
-                startCloudPolling()
-            }
-            return Result.success(Unit)
-        }
-
-        clearCloudAuthSession()
-        return tvDeviceAuthRepository.startSession().map { session ->
-            applyCloudAuthSession(session)
-            if (startPolling) {
-                startCloudPolling()
-            }
-        }
-    }
-
-    fun syncLocalStateToCloud(silent: Boolean = false, force: Boolean = false) {
-        if (!force && !_uiState.value.isLoggedIn) return
-        if (authRepository.getCurrentUserId().isNullOrBlank()) return
-        cloudSyncRepository.markLocalStateDirty()
-        viewModelScope.launch {
-            if (!force) {
-                delay(350)
-            }
-            var result = cloudSyncRepository.pushToCloud()
-            if (result.isFailure) {
-                delay(1200)
-                result = cloudSyncRepository.pushToCloud()
-            }
-
-            if (!silent && result.isSuccess) {
-                _uiState.value = _uiState.value.copy(
-                    toastMessage = "Cloud sync complete",
-                    toastType = ToastType.SUCCESS
-                )
-            } else if (!silent && result.isFailure) {
-                _uiState.value = _uiState.value.copy(
-                    toastMessage = result.exceptionOrNull()?.message ?: "Cloud sync failed",
-                    toastType = ToastType.ERROR
-                )
-            }
-        }
-    }
-
-    fun syncCloudStateToLocal(silent: Boolean = false) {
-        if (!_uiState.value.isLoggedIn) return
-        viewModelScope.launch {
-            restoreCloudStateToLocalInternal(silent = silent)
-        }
-    }
-
-    fun forceCloudSyncNow() {
-        if (_uiState.value.isForceCloudSyncing) return
-
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isForceCloudSyncing = true,
-                toastMessage = "Forcing cloud sync...",
-                toastType = ToastType.INFO
-            )
-
-            if (!ensureCloudSyncSession()) {
-                _uiState.value = _uiState.value.copy(
-                    isForceCloudSyncing = false,
-                    toastMessage = "Sign in to Streame Cloud first",
-                    toastType = ToastType.INFO
-                )
-                return@launch
-            }
-
-            // Push local state first (30s timeout), then pull remote state so this device ends
-            // with the server-authoritative snapshot after upload.
-            var pushResult = withTimeoutOrNull(30_000L) {
-                cloudSyncRepository.pushToCloud()
-            }
-            if (pushResult == null) {
-                _uiState.value = _uiState.value.copy(
-                    isForceCloudSyncing = false,
-                    toastMessage = "Cloud sync upload timed out — try again",
-                    toastType = ToastType.ERROR
-                )
-                return@launch
-            }
-            if (pushResult.isFailure) {
-                delay(1200)
-                pushResult = withTimeoutOrNull(30_000L) {
-                    cloudSyncRepository.pushToCloud()
-                }
-            }
-            if (pushResult == null || pushResult.isFailure) {
-                _uiState.value = _uiState.value.copy(
-                    isForceCloudSyncing = false,
-                    toastMessage = pushResult?.exceptionOrNull()?.message ?: "Cloud sync failed while uploading",
-                    toastType = ToastType.ERROR
-                )
-                return@launch
-            }
-
-            // Pull from cloud with timeout and single retry on failure
-            var restoreResult = withTimeoutOrNull(30_000L) {
-                restoreCloudStateToLocalInternal(silent = true)
-            } ?: CloudRestoreResult.FAILED
-            
-            if (restoreResult == CloudRestoreResult.FAILED) {
-                delay(1200)
-                restoreResult = withTimeoutOrNull(30_000L) {
-                    restoreCloudStateToLocalInternal(silent = true)
-                } ?: CloudRestoreResult.FAILED
-            }
-
-            _uiState.value = _uiState.value.copy(
-                isForceCloudSyncing = false,
-                toastMessage = when (restoreResult) {
-                    CloudRestoreResult.RESTORED -> "Cloud sync complete"
-                    CloudRestoreResult.NO_BACKUP -> "Cloud sync complete (no backup to restore)"
-                    CloudRestoreResult.FAILED -> "Upload complete, but restore failed"
-                },
-                toastType = if (restoreResult == CloudRestoreResult.FAILED) {
-                    ToastType.ERROR
-                } else {
-                    ToastType.SUCCESS
-                }
-            )
-        }
-    }
-
-    private suspend fun ensureCloudSyncSession(): Boolean {
-        if (authRepository.getCurrentUserId().isNullOrBlank()) {
-            authRepository.checkAuthState()
-        }
-        if (authRepository.getCurrentUserId().isNullOrBlank()) {
-            authRepository.getAccessToken()
-            authRepository.checkAuthState()
-        }
-        return authRepository.getCurrentUserId().isNullOrBlank().not()
-    }
-
-    private suspend fun restoreCloudStateToLocalInternal(silent: Boolean): CloudRestoreResult {
-        return when (cloudSyncRepository.pullFromCloud()) {
-            CloudSyncRepository.RestoreResult.RESTORED -> {
-                loadSettings()
-                runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
-                if (!silent) {
-                    _uiState.value = _uiState.value.copy(
-                        toastMessage = "Cloud restore complete",
-                        toastType = ToastType.SUCCESS
-                    )
-                }
-                CloudRestoreResult.RESTORED
-            }
-            CloudSyncRepository.RestoreResult.NO_BACKUP -> {
-                if (!silent) {
-                    _uiState.value = _uiState.value.copy(
-                        toastMessage = "No cloud backup found",
-                        toastType = ToastType.INFO
-                    )
-                }
-                CloudRestoreResult.NO_BACKUP
-            }
-            CloudSyncRepository.RestoreResult.FAILED -> {
-                if (!silent) {
-                    _uiState.value = _uiState.value.copy(
-                        toastMessage = "Cloud restore failed",
-                        toastType = ToastType.ERROR
-                    )
-                }
-                CloudRestoreResult.FAILED
-            }
-        }
-    }
-
-    fun onCloudProfileSwitchHandled() {
-        if (_uiState.value.shouldSwitchProfile) {
-            _uiState.value = _uiState.value.copy(shouldSwitchProfile = false)
-        }
-    }
 
     fun checkForAppUpdates(force: Boolean, showNoUpdateFeedback: Boolean) {
         if (!appUpdateRepository.supportsSelfUpdate()) {
@@ -2258,8 +1718,7 @@ class SettingsViewModel @Inject constructor(
                     traktRepository.clearContinueWatchingCache()
                     runCatching { traktRepository.getContinueWatching() }
                     performFullSync(silent = true)
-                    syncLocalStateToCloud(silent = true, force = true)
-                    runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
+                            runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                     return@launch
                 } catch (e: Exception) {
                     // Keep polling on 400 (pending) - user hasn't entered code yet
@@ -2310,7 +1769,6 @@ class SettingsViewModel @Inject constructor(
                 toastMessage = "Trakt disconnected",
                 toastType = ToastType.SUCCESS
             )
-            syncLocalStateToCloud(silent = true, force = true)
         }
     }
 
@@ -2318,17 +1776,6 @@ class SettingsViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(toastMessage = null)
     }
 
-    fun logout() {
-        viewModelScope.launch {
-            cancelCloudAuth()
-            authRepository.signOut()
-            _uiState.value = _uiState.value.copy(
-                toastMessage = "Signed out",
-                toastType = ToastType.SUCCESS
-            )
-        }
-    }
-    
     override fun onCleared() {
         super.onCleared()
         traktPollingJob?.cancel()

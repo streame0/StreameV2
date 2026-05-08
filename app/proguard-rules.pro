@@ -28,7 +28,7 @@
 }
 
 # Also strip ALL our custom AppLogger methods
--assumenosideeffects class com.arflix.tv.util.AppLogger {
+-assumenosideeffects class com.streame.tv.util.AppLogger {
     public static void v(...);
     public static void d(...);
     public static void i(...);
@@ -81,8 +81,8 @@
 # ============================================
 -keepattributes *Annotation*
 -keep class com.google.gson.** { *; }
--keep class com.arflix.tv.data.model.** { *; }
--keep class com.arflix.tv.data.api.** { *; }
+-keep class com.streame.tv.data.model.** { *; }
+-keep class com.streame.tv.data.api.** { *; }
 
 # Keep generic type information for Gson
 -keep class com.google.gson.reflect.TypeToken { *; }
@@ -94,7 +94,7 @@
 }
 
 # Keep enum field names for Gson (used in Trakt outbox persistence)
--keepclassmembers enum com.arflix.tv.data.repository.TraktOutboxAction { *; }
+-keepclassmembers enum com.streame.tv.data.repository.TraktOutboxAction { *; }
 
 # ============================================
 # ExoPlayer / Media3
@@ -111,8 +111,8 @@
 # Hilt / Dagger - KEEP EVERYTHING
 # ============================================
 # Keep ALL app classes to prevent Hilt/Dagger issues
--keep class com.arflix.tv.** { *; }
--keep interface com.arflix.tv.** { *; }
+-keep class com.streame.tv.** { *; }
+-keep interface com.streame.tv.** { *; }
 
 # Keep ALL Dagger/Hilt classes and generated code
 -keep class dagger.** { *; }
@@ -127,7 +127,7 @@
 -keep interface hilt_aggregated_deps.** { *; }
 
 # Suppress warnings for Hilt generated classes
--dontwarn com.arflix.tv.**_GeneratedInjector
+-dontwarn com.streame.tv.**_GeneratedInjector
 -dontwarn dagger.hilt.internal.aggregatedroot.codegen.**
 -dontwarn hilt_aggregated_deps.**
 
@@ -149,21 +149,10 @@
 -keep class * extends androidx.lifecycle.AndroidViewModel { *; }
 
 # ============================================
-# Supabase
+# Supabase / Ktor / Google Sign-In
 # ============================================
--keep class io.github.jan.supabase.** { *; }
--dontwarn io.github.jan.supabase.**
-
-# Ktor (used by Supabase)
--keep class io.ktor.** { *; }
--dontwarn io.ktor.**
-
-# ============================================
-# Google Sign-In / Credentials
-# ============================================
--keep class com.google.android.gms.auth.** { *; }
--keep class androidx.credentials.** { *; }
--dontwarn com.google.android.gms.**
+# Removed: Supabase and Google Sign-In are no longer used.
+# Trakt is the only cloud service.
 
 # ============================================
 # Firebase Crashlytics
@@ -195,11 +184,11 @@
 # App-specific keeps
 # ============================================
 # Keep app exception classes for crash reporting
--keep class com.arflix.tv.util.AppException { *; }
--keep class com.arflix.tv.util.AppException$* { *; }
+-keep class com.streame.tv.util.AppException { *; }
+-keep class com.streame.tv.util.AppException$* { *; }
 
 # Keep sealed classes for proper when() handling
--keep class com.arflix.tv.util.Result { *; }
--keep class com.arflix.tv.util.Result$* { *; }
--keep class com.arflix.tv.util.UiState { *; }
--keep class com.arflix.tv.util.UiState$* { *; }
+-keep class com.streame.tv.util.Result { *; }
+-keep class com.streame.tv.util.Result$* { *; }
+-keep class com.streame.tv.util.UiState { *; }
+-keep class com.streame.tv.util.UiState$* { *; }

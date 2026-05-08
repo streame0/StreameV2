@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
-import com.streame.tv.data.repository.CloudSyncScope
 import com.streame.tv.di.RepositoryAccessEntryPoint
 import com.streame.tv.ui.focus.StreameDpadFocusGroup
 import com.streame.tv.ui.skin.StreameFocusableSurface
@@ -125,11 +124,6 @@ suspend fun toggleCatalogueRowLayoutMode(
         val current = parseCardLayoutMode(prefs[key] ?: fallback)
         prefs[key] = toggledCardLayoutMode(current)
     }
-    entryPoint.cloudSyncInvalidationBus().markDirty(
-        CloudSyncScope.PROFILE_SETTINGS,
-        profileId,
-        "catalogue row layout"
-    )
 }
 
 @Composable

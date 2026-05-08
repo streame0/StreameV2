@@ -10,7 +10,6 @@ All notable changes to this project are documented in this file.
 - Trakt integration (sync, scrobble, watchlist).
 - TMDB metadata and discovery.
 - Android TV and mobile support.
-- IPTV/M3U/Xtream/Stalker source support.
 - CloudStream/community HTTP source addons.
 - Multi-profile support with PIN lock.
 - TV device authentication (pairing flow).

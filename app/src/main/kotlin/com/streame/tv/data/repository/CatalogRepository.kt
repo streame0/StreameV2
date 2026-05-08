@@ -46,7 +46,6 @@ class CatalogRepository @Inject constructor(
     private val profileManager: ProfileManager,
     private val traktApi: TraktApi,
     private val okHttpClient: OkHttpClient,
-    private val invalidationBus: CloudSyncInvalidationBus
 ) {
     private companion object {
         private const val ADDON_SOURCE_REF_PREFIX = "addon_catalog|"
@@ -103,7 +102,6 @@ class CatalogRepository @Inject constructor(
             hidden.add(trimmed)
             prefs[hiddenPreinstalledKey(profileId)] = gson.toJson(hidden.toList())
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, profileId, "hide preinstalled catalog")
     }
 
     private suspend fun hideAddonCatalog(profileId: String, catalogId: String) {
@@ -114,7 +112,6 @@ class CatalogRepository @Inject constructor(
             hidden.add(trimmed)
             prefs[hiddenAddonKey(profileId)] = gson.toJson(hidden.toList())
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, profileId, "hide addon catalog")
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -207,7 +204,6 @@ class CatalogRepository @Inject constructor(
                 prefs[hiddenPreinstalledKey(profileId)] = gson.toJson(cleaned)
             }
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, profileId, "set hidden preinstalled catalogs")
     }
 
     suspend fun setHiddenPreinstalledCatalogIdsForProfile(profileId: String, ids: List<String>) {
@@ -220,7 +216,6 @@ class CatalogRepository @Inject constructor(
                 prefs[hiddenPreinstalledKey(safeProfileId)] = gson.toJson(cleaned)
             }
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, safeProfileId, "set hidden preinstalled catalogs")
     }
 
     suspend fun getHiddenAddonCatalogIdsForActiveProfile(): List<String> {
@@ -245,7 +240,6 @@ class CatalogRepository @Inject constructor(
                 prefs[hiddenAddonKey(profileId)] = gson.toJson(cleaned)
             }
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, profileId, "set hidden addon catalogs")
     }
 
     suspend fun setHiddenAddonCatalogIdsForProfile(profileId: String, ids: List<String>) {
@@ -258,7 +252,6 @@ class CatalogRepository @Inject constructor(
                 prefs[hiddenAddonKey(safeProfileId)] = gson.toJson(cleaned)
             }
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, safeProfileId, "set hidden addon catalogs")
     }
 
     private suspend fun saveCatalogs(catalogs: List<CatalogConfig>) {
@@ -269,7 +262,6 @@ class CatalogRepository @Inject constructor(
         context.settingsDataStore.edit { prefs ->
             prefs[catalogsKey(profileId)] = gson.toJson(sanitized)
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, profileId, "save catalogs")
     }
 
     suspend fun replaceCatalogsForProfile(profileId: String, catalogs: List<CatalogConfig>) {
@@ -280,7 +272,6 @@ class CatalogRepository @Inject constructor(
         context.settingsDataStore.edit { prefs ->
             prefs[catalogsKey(safeProfileId)] = gson.toJson(sanitized)
         }
-        invalidationBus.markDirty(CloudSyncScope.CATALOGS, safeProfileId, "replace catalogs")
     }
 
     suspend fun ensurePreinstalled(defaultCategories: List<Category>): List<CatalogConfig> {

@@ -800,12 +800,11 @@ private fun presentSource(stream: StreamSource): SourcePresentation {
         searchBlob.contains("magnet:", ignoreCase = true)
 
     val hasDirectHttpUrl = !stream.url.isNullOrBlank() && stream.url.startsWith("http", true)
-    val isPlaylistsVod = stream.addonId == "Playlists_xtream_vod" || addonLower.contains("Playlists vod")
 
     val transportLabel = when {
         stream.behaviorHints?.cached == true -> "Cached"
         !stream.infoHash.isNullOrBlank() || stream.sources.isNotEmpty() || isTorrentProvider -> "Torrent"
-        isPlaylistsVod && hasDirectHttpUrl -> "VOD"
+        hasDirectHttpUrl -> "Direct"
         else -> null
     }
     val statusLabel = when {

@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
-import com.streame.tv.data.repository.CloudSyncRepository
 import com.streame.tv.data.repository.MediaRepository
 import com.streame.tv.data.repository.TraktRepository
 import com.streame.tv.data.repository.WatchlistRepository
@@ -32,7 +31,6 @@ data class WatchlistUiState(
 @HiltViewModel
 class WatchlistViewModel @Inject constructor(
     private val watchlistRepository: WatchlistRepository,
-    private val cloudSyncRepository: CloudSyncRepository,
     private val traktRepository: TraktRepository,
     private val mediaRepository: MediaRepository
 ) : ViewModel() {
@@ -90,7 +88,6 @@ class WatchlistViewModel @Inject constructor(
     private fun loadWatchlistInstant() {
         viewModelScope.launch {
             if (watchlistRepository.getCachedItems().isEmpty()) {
-                runCatching { cloudSyncRepository.pullFromCloud() }
             }
             val traktConnected = runCatching { traktRepository.isAuthenticated.first() }.getOrDefault(false)
             if (traktConnected) {
@@ -193,7 +190,6 @@ class WatchlistViewModel @Inject constructor(
                     toastMessage = "Removed from watchlist",
                     toastType = ToastType.SUCCESS
                 )
-                runCatching { cloudSyncRepository.pushToCloud() }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     toastMessage = "Failed to remove from watchlist",
@@ -225,8 +221,7 @@ class WatchlistViewModel @Inject constructor(
 
                     watchlistRepository.syncFromTraktOrder(orderedTraktItems)
                     _uiState.value = WatchlistUiState(isLoading = false, items = orderedTraktItems)
-                    runCatching { cloudSyncRepository.pushToCloud() }
-                } else if (rawCount == 0) {
+                    } else if (rawCount == 0) {
                     val cachedItems = (watchlistRepository.getCachedItems().ifEmpty {
                         watchlistRepository.getWatchlistItems()
                     }).watchlistDisplayOrder()

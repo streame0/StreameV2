@@ -15,12 +15,11 @@ import com.streame.tv.util.EpisodePointer
 import com.streame.tv.util.EpisodeProgressSnapshot
 import com.streame.tv.util.WatchedEpisodeSnapshot
 import com.streame.tv.util.Constants
+import com.streame.tv.util.AppLogger
+import com.streame.tv.util.SecureStorage
 import com.streame.tv.util.settingsDataStore
 import com.streame.tv.util.traktDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
-import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.createSupabaseClient
-import io.github.jan.supabase.postgrest.Postgrest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Deferred
@@ -37,9 +36,6 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -55,13 +51,8 @@ import javax.inject.Singleton
 /**
  * Repository for Trakt.tv API interactions
  *
- * This repository now uses TraktSyncService for watched state management,
- * which ensures Supabase is the source of truth for all watched data.
- *
- * Key changes:
- * - Watched state queries Supabase, not local cache
- * - Mark watched/unwatched writes to Supabase first, then syncs to Trakt
- * - Continue Watching uses Supabase data augmented with Trakt progress API
+ * All Trakt API calls go direct. Watched state is managed locally
+ * and synced with Trakt. No Supabase.
  */
 @Singleton
 class TraktRepository @Inject constructor(
@@ -77,20 +68,15 @@ class TraktRepository @Inject constructor(
     // Lazy sync service to avoid circular dependency
     private val syncService: TraktSyncService by lazy { syncServiceProvider.get() }
 
-    // Supabase client for profile sync (lazy to avoid startup overhead)
-    private val supabase: SupabaseClient by lazy {
-        createSupabaseClient(
-            supabaseUrl = Constants.SUPABASE_URL,
-            supabaseKey = Constants.SUPABASE_ANON_KEY
-        ) {
-            install(Postgrest)
-        }
-    }
-
-    // User ID key for Supabase sync (shared across profiles)
-    private val USER_ID_KEY = stringPreferencesKey("user_id")
     private val clientId = Constants.TRAKT_CLIENT_ID
     private val clientSecret = Constants.TRAKT_CLIENT_SECRET
+
+    // Keystore aliases for encrypting Trakt tokens at rest
+    private companion object {
+        const val KEYSTORE_ALIAS_ACCESS = "streame_trakt_access_token"
+        const val KEYSTORE_ALIAS_REFRESH = "streame_trakt_refresh_token"
+    }
+
     // Profile-scoped preference keys - each profile has its own Trakt connection
     private fun accessTokenKey() = profileManager.profileStringKey("trakt_access_token")
     private fun refreshTokenKey() = profileManager.profileStringKey("trakt_refresh_token")
@@ -154,7 +140,7 @@ class TraktRepository @Inject constructor(
      * Check if current profile is authenticated with Trakt
      */
     val isAuthenticated: Flow<Boolean> = context.traktDataStore.data.map { prefs ->
-        prefs[accessTokenKey()] != null
+        SecureStorage.decrypt(prefs[accessTokenKey()], KEYSTORE_ALIAS_ACCESS) != null
     }
 
     /**
@@ -196,8 +182,8 @@ class TraktRepository @Inject constructor(
     suspend fun refreshTokenIfNeeded(): String? {
         ensureProfileCacheScope()
         val prefs = context.traktDataStore.data.first()
-        val accessToken = prefs[accessTokenKey()] ?: return null
-        val refreshToken = prefs[refreshTokenKey()]
+        val accessToken = SecureStorage.decrypt(prefs[accessTokenKey()], KEYSTORE_ALIAS_ACCESS) ?: return null
+        val refreshToken = SecureStorage.decrypt(prefs[refreshTokenKey()], KEYSTORE_ALIAS_REFRESH)
         val expiresAt = prefs[expiresAtKey()]
 
         // If we don't have refresh metadata (older tokens), use the existing access token
@@ -223,9 +209,9 @@ class TraktRepository @Inject constructor(
             saveToken(newToken)
             newToken.accessToken
         } catch (e: Exception) {
-            System.err.println("TraktRepo: token refresh failed: ${e.message}")
+            AppLogger.e("TraktRepo", "Token refresh failed", e)
             // Token is expired and refresh failed – return null so getAuthHeader()
-            // can try loading a fresh token from Supabase profile.
+            // returns null and the caller can handle unauthenticated state.
             null
         }
     }
@@ -233,28 +219,12 @@ class TraktRepository @Inject constructor(
     private suspend fun saveToken(token: TraktToken) {
         ensureProfileCacheScope()
         context.traktDataStore.edit { prefs ->
-            prefs[accessTokenKey()] = token.accessToken
-            prefs[refreshTokenKey()] = token.refreshToken
+            prefs[accessTokenKey()] = SecureStorage.encrypt(token.accessToken, KEYSTORE_ALIAS_ACCESS)
+            prefs[refreshTokenKey()] = SecureStorage.encrypt(token.refreshToken, KEYSTORE_ALIAS_REFRESH)
             prefs[expiresAtKey()] = token.createdAt + token.expiresIn
         }
     }
 
-    /**
-     * Set the user ID for Supabase sync (called after login)
-     */
-    suspend fun setUserId(userId: String) {
-        context.traktDataStore.edit { prefs ->
-            prefs[USER_ID_KEY] = userId
-        }
-    }
-
-    /**
-     * Load tokens from Supabase profile
-     */
-    suspend fun loadTokensFromProfile(traktToken: JsonObject?) {
-        // Legacy account-level Supabase trakt_token is intentionally ignored.
-        // Per-profile Trakt tokens are restored through importTokensForProfiles.
-    }
 
     suspend fun logout() {
         ensureProfileCacheScope()
@@ -766,11 +736,11 @@ class TraktRepository @Inject constructor(
         val prefix = "show_tmdb:$tmdbId:"
         val localOptimistic = watchedEpisodesCache.filter { it.startsWith(prefix) }.toSet()
 
-        // For non-Trakt profiles, use the global watched cache (populated from Supabase)
+        // For non-Trakt profiles, use the global watched cache (populated from local)
         if (auth == null) {
             val result = localOptimistic
 
-            // Direct Supabase query to catch any records not yet in cache
+            // Direct cache query to catch any records not yet in cache
             try {
                 val directKeys = syncService.getWatchedEpisodesForShow(tmdbId)
                 if (directKeys.size > result.size) {
@@ -923,13 +893,6 @@ class TraktRepository @Inject constructor(
         }
     }
 
-    /**
-     * Sync locally stored Trakt tokens to Supabase if profile is empty.
-     */
-    suspend fun syncLocalTokensToProfileIfNeeded() {
-        // Account-level Supabase token sync is disabled. Cloud sync stores Trakt
-        // tokens in the profile payload so one profile cannot overwrite another.
-    }
 
     /**
      * Delete playback progress for a specific episode
@@ -1356,7 +1319,7 @@ class TraktRepository @Inject constructor(
                     try {
                         val item = candidate.item
                         if (item.mediaType == MediaType.MOVIE) {
-                            val details = tmdbApi.getMovieDetails(item.id, Constants.TMDB_API_KEY)
+                            val details = tmdbApi.getMovieDetails(item.id)
                             item.copy(
                                 backdropPath = details.backdropPath?.let { "${Constants.BACKDROP_BASE_LARGE}$it" },
                                 posterPath = details.posterPath?.let { "${Constants.IMAGE_BASE}$it" },
@@ -1365,7 +1328,7 @@ class TraktRepository @Inject constructor(
                                 duration = details.runtime?.let { formatRuntime(it) } ?: ""
                             )
                         } else {
-                            val details = tmdbApi.getTvDetails(item.id, Constants.TMDB_API_KEY)
+                            val details = tmdbApi.getTvDetails(item.id)
                             // Allow items where Trakt says there's a next episode even if
                             // TMDB hasn't updated its season count yet. Trakt's progress
                             // API is authoritative for "what to watch next" — TMDB often
@@ -1635,9 +1598,6 @@ class TraktRepository @Inject constructor(
         progress: Int, // 0-100
         positionSeconds: Long = 0L,
         durationSeconds: Long = 0L,
-        streamKey: String? = null,
-        streamAddonId: String? = null,
-        streamTitle: String? = null,
         year: String = ""
     ) {
         ensureProfileCacheScope()
@@ -1665,9 +1625,6 @@ class TraktRepository @Inject constructor(
             episodeTitle = episodeTitle,
             backdropPath = backdropPath,
             posterPath = posterPath,
-            streamKey = streamKey,
-            streamAddonId = streamAddonId,
-            streamTitle = streamTitle,
             year = year,
             updatedAtMs = System.currentTimeMillis()
         )
@@ -1882,11 +1839,10 @@ class TraktRepository @Inject constructor(
         // Skip if already enriched (has overview and backdrop with full URL)
         if (item.overview.isNotEmpty() && item.backdropPath?.startsWith("http") == true) return@coroutineScope item
 
-        val apiKey = Constants.TMDB_API_KEY
         try {
             return@coroutineScope if (item.mediaType == MediaType.TV) {
                 val details = try {
-                    tmdbApi.getTvDetails(item.id, apiKey)
+                    tmdbApi.getTvDetails(item.id)
                 } catch (_: Exception) { null }
 
                 // Get episode info for episode title only (not for backdrop/overview)
@@ -1900,7 +1856,7 @@ class TraktRepository @Inject constructor(
                             // We won the insert, do the network call
                             launch {
                                 val result = try {
-                                    tmdbApi.getTvSeason(item.id, item.season, apiKey)
+                                    tmdbApi.getTvSeason(item.id, item.season)
                                 } catch (_: Exception) { null }
                                 newDeferred.complete(result)
                             }
@@ -1930,7 +1886,7 @@ class TraktRepository @Inject constructor(
                 )
             } else {
                 val details = try {
-                    tmdbApi.getMovieDetails(item.id, apiKey)
+                    tmdbApi.getMovieDetails(item.id)
                 } catch (_: Exception) { null }
 
                 // Build full URLs for images
@@ -2492,7 +2448,7 @@ class TraktRepository @Inject constructor(
         val ids = buildList {
             imdbId?.let { id ->
                 runCatching {
-                    tmdbApi.findByExternalId(id, Constants.TMDB_API_KEY).movieResults
+                    tmdbApi.findByExternalId(id).movieResults
                         .mapNotNull { it.id.takeIf { tmdbId -> tmdbId > 0 } }
                 }.getOrNull()?.let { addAll(it) }
             }
@@ -2501,7 +2457,7 @@ class TraktRepository @Inject constructor(
 
         val exactIdMatches = mutableListOf<TmdbMovieDetails>()
         for (id in ids) {
-            val details = runCatching { tmdbApi.getMovieDetails(id, Constants.TMDB_API_KEY) }.getOrNull() ?: continue
+            val details = runCatching { tmdbApi.getMovieDetails(id) }.getOrNull() ?: continue
             val sameTitle = isSameWatchlistTitle(movie.title, details.title) ||
                 details.originalTitle?.let { isSameWatchlistTitle(movie.title, it) } == true
             val sameYear = yearCompatible(movie.year, details.releaseDate?.take(4)?.toIntOrNull())
@@ -2520,14 +2476,14 @@ class TraktRepository @Inject constructor(
 
         val searchMatch = searchTmdbWatchlistMatch(movie.title, movie.year, MediaType.MOVIE)
         if (searchMatch != null) {
-            return runCatching { tmdbApi.getMovieDetails(searchMatch, Constants.TMDB_API_KEY) }.getOrNull()
+            return runCatching { tmdbApi.getMovieDetails(searchMatch) }.getOrNull()
         }
 
         return if (movie.year == null) {
             exactIdMatches.firstOrNull()
         } else if (normalizeWatchlistTitle(movie.title).isBlank()) {
             ids.firstNotNullOfOrNull { id ->
-                runCatching { tmdbApi.getMovieDetails(id, Constants.TMDB_API_KEY) }.getOrNull()
+                runCatching { tmdbApi.getMovieDetails(id) }.getOrNull()
             }
         } else {
             null
@@ -2539,7 +2495,7 @@ class TraktRepository @Inject constructor(
         val ids = buildList {
             imdbId?.let { id ->
                 runCatching {
-                    tmdbApi.findByExternalId(id, Constants.TMDB_API_KEY).tvResults
+                    tmdbApi.findByExternalId(id).tvResults
                         .mapNotNull { it.id.takeIf { tmdbId -> tmdbId > 0 } }
                 }.getOrNull()?.let { addAll(it) }
             }
@@ -2547,7 +2503,6 @@ class TraktRepository @Inject constructor(
                 runCatching {
                     tmdbApi.findByExternalId(
                         tvdbId.toString(),
-                        Constants.TMDB_API_KEY,
                         externalSource = "tvdb_id"
                     ).tvResults.mapNotNull { it.id.takeIf { tmdbId -> tmdbId > 0 } }
                 }.getOrNull()?.let { addAll(it) }
@@ -2557,7 +2512,7 @@ class TraktRepository @Inject constructor(
 
         val exactIdMatches = mutableListOf<TmdbTvDetails>()
         for (id in ids) {
-            val details = runCatching { tmdbApi.getTvDetails(id, Constants.TMDB_API_KEY) }.getOrNull() ?: continue
+            val details = runCatching { tmdbApi.getTvDetails(id) }.getOrNull() ?: continue
             val sameTitle = isSameWatchlistTitle(show.title, details.name) ||
                 details.originalName?.let { isSameWatchlistTitle(show.title, it) } == true
             val sameYear = yearCompatible(show.year, details.firstAirDate?.take(4)?.toIntOrNull())
@@ -2581,14 +2536,14 @@ class TraktRepository @Inject constructor(
             allowTitleOnly = ids.isEmpty()
         )
         if (searchMatch != null) {
-            return runCatching { tmdbApi.getTvDetails(searchMatch, Constants.TMDB_API_KEY) }.getOrNull()
+            return runCatching { tmdbApi.getTvDetails(searchMatch) }.getOrNull()
         }
 
         return if (show.year == null) {
             exactIdMatches.firstOrNull()
         } else if (normalizeWatchlistTitle(show.title).isBlank()) {
             ids.firstNotNullOfOrNull { id ->
-                runCatching { tmdbApi.getTvDetails(id, Constants.TMDB_API_KEY) }.getOrNull()
+                runCatching { tmdbApi.getTvDetails(id) }.getOrNull()
             }
         } else {
             null
@@ -2608,14 +2563,12 @@ class TraktRepository @Inject constructor(
         return runCatching {
             val results = when (mediaType) {
                 MediaType.MOVIE -> tmdbApi.searchMovies(
-                    apiKey = Constants.TMDB_API_KEY,
                     query = title,
                     page = 1,
                     primaryReleaseYear = year,
                     year = year
                 ).results
                 MediaType.TV -> tmdbApi.searchTv(
-                    apiKey = Constants.TMDB_API_KEY,
                     query = title,
                     page = 1,
                     firstAirDateYear = year
@@ -3228,7 +3181,7 @@ class TraktRepository @Inject constructor(
 
     // ========== Local Watched Status Cache ==========
 
-    // In-memory cache for watched status (mirrors Supabase data)
+    // In-memory cache for watched status (mirrors Trakt + local data)
     private val watchedMoviesCache = mutableSetOf<Int>()
     private val watchedEpisodesCache = mutableSetOf<String>()
     private var cacheInitialized = false
@@ -3246,8 +3199,7 @@ class TraktRepository @Inject constructor(
     }
 
     /**
-     * Initialize watched cache from Supabase (source of truth)
-     * Falls back to Trakt if Supabase data is not available
+     * Initialize watched cache from Trakt API + local data
      *
      * IMPORTANT: If the current profile has no Trakt auth, caches remain empty
      * so all content appears unwatched (proper profile isolation)
@@ -3268,31 +3220,17 @@ class TraktRepository @Inject constructor(
             val hasTraktAuth = refreshTokenIfNeeded() != null
             val (localSnapshotMovies, localSnapshotEpisodes) = loadLocalWatchedSnapshotForCurrentProfile()
 
-            // Try to load from Supabase first (works for both Trakt and non-Trakt Cloud profiles)
-            val supabaseMovies = syncService.getWatchedMovies()
-            val supabaseEpisodes = syncService.getWatchedEpisodes()
-
-            // If no Trakt auth AND no Supabase data, leave caches empty
-            if (!hasTraktAuth && supabaseMovies.isEmpty() && supabaseEpisodes.isEmpty()) {
-                watchedMoviesCache.clear()
-                watchedMoviesCache.addAll(localSnapshotMovies)
-                watchedEpisodesCache.clear()
-                watchedEpisodesCache.addAll(localSnapshotEpisodes)
-                cacheInitialized = true
-                return
-            }
-
-            // Only fall back to Trakt API if we have Trakt auth and no Supabase data
-            val traktMovies = if (supabaseMovies.isEmpty() && hasTraktAuth) getWatchedMovies() else emptySet()
-            val traktEpisodes = if (supabaseEpisodes.isEmpty() && hasTraktAuth) getWatchedEpisodes() else emptySet()
+            // Load from Trakt API (direct calls, no Supabase)
+            val traktMovies = if (hasTraktAuth) getWatchedMovies() else emptySet()
+            val traktEpisodes = if (hasTraktAuth) getWatchedEpisodes() else emptySet()
 
             watchedMoviesCache.clear()
             watchedMoviesCache.addAll(localSnapshotMovies)
-            watchedMoviesCache.addAll(if (supabaseMovies.isNotEmpty()) supabaseMovies else traktMovies)
+            watchedMoviesCache.addAll(traktMovies)
 
             watchedEpisodesCache.clear()
             watchedEpisodesCache.addAll(localSnapshotEpisodes)
-            watchedEpisodesCache.addAll(if (supabaseEpisodes.isNotEmpty()) supabaseEpisodes else traktEpisodes)
+            watchedEpisodesCache.addAll(traktEpisodes)
 
             cacheInitialized = true
         } catch (e: Exception) {
@@ -3434,9 +3372,6 @@ data class ContinueWatchingItem(
     val episodeTitle: String? = null,
     val backdropPath: String? = null,
     val posterPath: String? = null,
-    val streamKey: String? = null,
-    val streamAddonId: String? = null,
-    val streamTitle: String? = null,
     val year: String = "",
     val releaseDate: String = "",  // Full formatted date
     val isUpNext: Boolean = false,

@@ -28,6 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import com.streame.tv.data.model.CollectionGroupKind
+import androidx.tv.foundation.lazy.grid.TvGridCells
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -50,17 +52,18 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.tv.foundation.lazy.grid.TvGridCells
 import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
 import androidx.tv.foundation.lazy.grid.itemsIndexed
 import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
 import coil.compose.AsyncImage
 import com.streame.tv.data.model.CatalogConfig
-import com.streame.tv.data.model.CollectionGroupKind
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
+import com.streame.tv.data.model.Category
 import com.streame.tv.data.repository.CatalogRepository
 import com.streame.tv.data.repository.MediaRepository
+import com.streame.tv.util.AppException
+import com.streame.tv.util.toAppException
 import com.streame.tv.ui.components.CardLayoutMode
 import com.streame.tv.ui.components.MediaCard
 import com.streame.tv.ui.components.rememberCatalogueRowLayoutMode
@@ -97,10 +100,13 @@ data class CollectionDetailsUiState(
     val hasMoreSeries: Boolean = false,
     val loadedMovieOffset: Int = 0,
     val loadedSeriesOffset: Int = 0,
-    val error: String? = null
+    val error: AppException? = null,
+    val retryAction: (() -> Unit)? = null
 ) {
     val hasMovies: Boolean get() = movieItems.isNotEmpty()
     val hasSeries: Boolean get() = seriesItems.isNotEmpty()
+    val errorMessage: String? get() = error?.formattedMessage
+    val isRetryable: Boolean get() = error?.isRetryable == true
 }
 
 @HiltViewModel
@@ -133,7 +139,7 @@ class CollectionDetailsViewModel @Inject constructor(
                 _uiState.value = CollectionDetailsUiState(
                     isLoadingMovies = false,
                     isLoadingSeries = false,
-                    error = "Collection not found"
+                    error = AppException.Server("Collection not found", 404)
                 )
                 return@launch
             }
@@ -167,31 +173,35 @@ class CollectionDetailsViewModel @Inject constructor(
     }
 
     private suspend fun loadInitialTab(catalog: CatalogConfig, tab: CollectionTab) {
-        val page = runCatching {
+        val result = runCatching {
             mediaRepository.loadCollectionCatalogPage(
                 catalogForTab(catalog, tab),
                 offset = 0,
                 limit = FIRST_PAGE
             )
-        }.getOrNull()
+        }
+        val page = result.getOrNull()
         val pageItems = when (tab) {
             CollectionTab.MOVIES -> page?.items.orEmpty().filter { it.mediaType == MediaType.MOVIE }
             CollectionTab.SERIES -> page?.items.orEmpty().filter { it.mediaType == MediaType.TV }
         }
+        val tabError = result.exceptionOrNull()?.let { if (page == null) it.toAppException() else null }
         _uiState.value = when (tab) {
             CollectionTab.MOVIES -> _uiState.value.copy(
                 movieItems = pageItems,
                 isLoadingMovies = false,
                 hasMoreMovies = page?.hasMore == true,
                 loadedMovieOffset = pageItems.size,
-                error = _uiState.value.error ?: if (page == null) "Failed to load collection" else null
+                error = _uiState.value.error ?: tabError,
+                retryAction = if (_uiState.value.error != null || tabError != null) {{ load(catalog.id) }} else null
             )
             CollectionTab.SERIES -> _uiState.value.copy(
                 seriesItems = pageItems,
                 isLoadingSeries = false,
                 hasMoreSeries = page?.hasMore == true,
                 loadedSeriesOffset = pageItems.size,
-                error = _uiState.value.error ?: if (page == null) "Failed to load collection" else null
+                error = _uiState.value.error ?: tabError,
+                retryAction = if (_uiState.value.error != null || tabError != null) {{ load(catalog.id) }} else null
             )
         }
         preloadLogos(pageItems.take(2))
@@ -534,7 +544,7 @@ fun CollectionDetailsScreen(
             onNearEnd = { viewModel.loadMoreIfNeeded(activeTab) },
             isLoading = isTabLoading,
             isLoadingMore = isTabLoadingMore,
-            emptyMessage = uiState.error ?: "Nothing to show here yet.",
+            emptyMessage = uiState.errorMessage ?: "Nothing to show here yet.",
             topContentPadding = if (isMobile) 18.dp else if (usePosterCards) 14.dp else 10.dp
         )
     }

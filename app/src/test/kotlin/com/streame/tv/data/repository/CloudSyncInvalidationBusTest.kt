@@ -13,12 +13,12 @@ class CloudSyncInvalidationBusTest {
         val bus = CloudSyncInvalidationBus()
 
         bus.events.test {
-            bus.markDirty(CloudSyncScope.IPTV, "kids", "favorite channel")
+            bus.markDirty(CloudSyncScope.WATCHLIST, "kids", "favorite show")
 
             val event = awaitItem()
-            assertEquals(CloudSyncScope.IPTV, event.scope)
+            assertEquals(CloudSyncScope.WATCHLIST, event.scope)
             assertEquals("kids", event.profileId)
-            assertEquals("favorite channel", event.reason)
+            assertEquals("favorite show", event.reason)
             cancelAndIgnoreRemainingEvents()
         }
     }

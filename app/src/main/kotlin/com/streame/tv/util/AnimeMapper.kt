@@ -1022,7 +1022,7 @@ class AnimeMapper @Inject constructor(
             }
 
             try {
-                val tvDetails = tmdbApi.getTvDetails(tmdbId, Constants.TMDB_API_KEY)
+                val tvDetails = tmdbApi.getTvDetails(tmdbId)
                 cacheMutex.withLock {
                     evictIfNeeded(tmdbSeasonEpCountCache)
                     for (season in tvDetails.seasons) {

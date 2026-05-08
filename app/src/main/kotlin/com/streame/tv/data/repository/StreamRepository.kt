@@ -82,8 +82,7 @@ class StreamRepository @Inject constructor(
     private val cloudstreamRepositoryService: CloudstreamRepositoryService,
     private val cloudstreamPluginInstaller: CloudstreamPluginInstaller,
     private val cloudstreamProviderRuntime: CloudstreamProviderRuntime,
-    private val httpLocalScraperRuntime: HttpLocalScraperRuntime,
-    private val invalidationBus: CloudSyncInvalidationBus
+    private val httpLocalScraperRuntime: HttpLocalScraperRuntime
 ) {
     companion object {
         const val SUPPORTED_CLOUDSTREAM_API_VERSION = 2
@@ -240,7 +239,6 @@ class StreamRepository @Inject constructor(
     suspend fun setTorrServerBaseUrl(raw: String) {
         // Allow blank to reset to default autodetect.
         context.streamDataStore.edit { prefs -> prefs[torrServerBaseUrlKey()] = raw.trim() }
-        invalidationBus.markDirty(CloudSyncScope.PROFILE_SETTINGS, profileManager.getProfileIdSync(), "torrserver url")
     }
 
     // Default addons - only built-in sources that work without configuration
@@ -273,7 +271,6 @@ class StreamRepository @Inject constructor(
             hidden.add(trimmed)
             prefs[hiddenBuiltInAddonsKey()] = gson.toJson(hidden.toList())
         }
-        invalidationBus.markDirty(CloudSyncScope.ADDONS, profileManager.getProfileIdSync(), "hide builtin addon")
     }
 
     // ========== Addon Management ==========
@@ -846,7 +843,6 @@ class StreamRepository @Inject constructor(
             prefs.remove(pendingAddonsKeyFor(profileId))
         }
         synchronized(streamResultCache) { streamResultCache.clear() }
-        invalidationBus.markDirty(CloudSyncScope.ADDONS, profileId, "replace addons")
     }
 
     suspend fun replaceSharedAddonsFromCloud(addons: List<Addon>) {
@@ -856,7 +852,6 @@ class StreamRepository @Inject constructor(
             prefs.remove(sharedPendingAddonsKey)
         }
         synchronized(streamResultCache) { streamResultCache.clear() }
-        invalidationBus.markDirty(CloudSyncScope.ADDONS, profileManager.getProfileIdSync(), "replace shared addons")
     }
 
     suspend fun replaceCloudstreamRepositoriesForProfile(
@@ -869,7 +864,6 @@ class StreamRepository @Inject constructor(
             prefs[cloudstreamReposKeyFor(profileId)] = gson.toJson(repositories)
             prefs.remove(cloudstreamPendingReposKeyFor(profileId))
         }
-        invalidationBus.markDirty(CloudSyncScope.ADDONS, profileId, "replace cloudstream repositories")
     }
 
     suspend fun replaceSharedCloudstreamRepositoriesFromCloud(repositories: List<CloudstreamRepositoryRecord>) {
@@ -877,7 +871,6 @@ class StreamRepository @Inject constructor(
             prefs[sharedCloudstreamReposKey] = gson.toJson(repositories)
             prefs.remove(sharedCloudstreamPendingReposKey)
         }
-        invalidationBus.markDirty(CloudSyncScope.ADDONS, profileManager.getProfileIdSync(), "replace shared cloudstream repositories")
     }
 
     private suspend fun saveAddons(addons: List<Addon>) {
@@ -892,7 +885,6 @@ class StreamRepository @Inject constructor(
             prefs.remove(pendingAddonsKey())
         }
         synchronized(streamResultCache) { streamResultCache.clear() }
-        invalidationBus.markDirty(CloudSyncScope.ADDONS, profileManager.getProfileIdSync(), "save addons")
     }
 
     private fun sanitizeAddonDisplayName(addon: Addon): Addon {
@@ -972,7 +964,17 @@ class StreamRepository @Inject constructor(
     }
 
     private suspend fun installedAddonsForSourceResolution(): List<Addon> {
-        val current = installedAddons.first()
+        // Retry: on cold start, DataStore may emit the default prefs (only OpenSubtitles)
+        // before the persisted addon list is read from disk. Wait with increasing
+        // delays and re-read until streaming addons appear or we exhaust retries.
+        var current = installedAddons.first()
+        val retryDelaysMs = listOf(300L, 600L, 1000L)
+        for (delayMs in retryDelaysMs) {
+            val hasStreamingAddons = current.any { it.isInstalled && it.isEnabled && it.type != AddonType.SUBTITLE }
+            if (hasStreamingAddons) break
+            kotlinx.coroutines.delay(delayMs)
+            current = installedAddons.first()
+        }
         val needsCloudstreamRestore = current.any { addon ->
             addon.runtimeKind == RuntimeKind.CLOUDSTREAM &&
                 addon.isInstalled &&
@@ -994,7 +996,17 @@ class StreamRepository @Inject constructor(
     }
 
     /**
-     * Load addons from Supabase profile (called on login)
+     * Get installed streaming addons with DataStore initialization retry.
+     * Use this instead of installedAddons.first() to avoid cold-start race conditions
+     * where DataStore hasn't loaded the persisted addon list yet.
+     */
+    suspend fun getReliableStreamingAddons(): List<Addon> {
+        return installedAddonsForSourceResolution()
+            .filter { it.isInstalled && it.isEnabled && it.type != AddonType.SUBTITLE }
+    }
+
+    /**
+     * Load addons from profile (called on login)
      * Merges cloud addons with local defaults
      */
     suspend fun syncAddonsFromCloud() {
@@ -1080,7 +1092,6 @@ class StreamRepository @Inject constructor(
             prefs[cloudstreamReposKey()] = json
             prefs.remove(cloudstreamPendingReposKey())
         }
-        invalidationBus.markDirty(CloudSyncScope.ADDONS, profileManager.getProfileIdSync(), "save cloudstream repositories")
     }
 
     private fun mergeAddonLists(primary: List<Addon>, secondary: List<Addon>): List<Addon> {
@@ -1376,7 +1387,7 @@ class StreamRepository @Inject constructor(
     private val ADDON_TIMEOUT_MS = 6_000L
     // Subtitles should not block playback but need enough time on slow connections.
     private val SUBTITLE_TIMEOUT_MS = 6_000L
-    // If addons return nothing, allow Xtream VOD lookup to recover playback.
+    // VOD lookup timeout for addon fallback
     private val VOD_LOOKUP_TIMEOUT_MS = 6_000L
     // If addons already returned streams, keep VOD lookup shorter to avoid UI delay.
     private val VOD_APPEND_TIMEOUT_MS = 3_000L
@@ -2593,6 +2604,15 @@ class StreamRepository @Inject constructor(
                 okHttpClient.newCall(request).execute().close()
             }
         }
+    }
+
+    /**
+     * Invalidate the resolved stream cache for a specific stream.
+     * Call this when the user explicitly switches to a different source to ensure
+     * fresh resolution instead of potentially stale cached results.
+     */
+    fun invalidateResolvedStreamCache(stream: StreamSource) {
+        resolvedStreamCache.remove(resolvedStreamCacheKey(stream))
     }
 
     /**

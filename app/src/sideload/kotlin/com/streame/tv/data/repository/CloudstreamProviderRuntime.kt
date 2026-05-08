@@ -322,8 +322,7 @@ class CloudstreamProviderRuntime @Inject constructor(
         RequestKind.MOVIE -> this == TvType.Movie ||
             this == TvType.AnimeMovie ||
             this == TvType.Torrent ||
-            this == TvType.Documentary ||
-            this == TvType.Live
+            this == TvType.Documentary
         RequestKind.SERIES -> this == TvType.TvSeries ||
             this == TvType.Anime ||
             this == TvType.Cartoon ||
@@ -335,7 +334,6 @@ class CloudstreamProviderRuntime @Inject constructor(
         is MovieLoadResponse -> response.dataUrl.takeIf { it.isNotBlank() }
         is TvSeriesLoadResponse -> response.episodes.firstOrNull()?.data?.takeIf { it.isNotBlank() }
         is AnimeLoadResponse -> response.episodes.values.flatten().firstOrNull()?.data?.takeIf { it.isNotBlank() }
-        is com.lagradost.cloudstream3.LiveStreamLoadResponse -> response.dataUrl.takeIf { it.isNotBlank() }
         else -> null
     }
 

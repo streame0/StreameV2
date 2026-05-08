@@ -21,8 +21,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -33,24 +33,78 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * TraktSyncService - Manages synchronization between Trakt and Supabase
+ * Local watch history record (previously in SupabaseApi, now standalone)
+ */
+data class WatchHistoryRecord(
+    val userId: String? = null,
+    val profileId: String? = null,
+    val mediaType: String,
+    val showTmdbId: Int? = null,
+    val showTraktId: Int? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val traktEpisodeId: Int? = null,
+    val tmdbEpisodeId: Int? = null,
+    val progress: Float = 0f,
+    val positionSeconds: Long = 0L,
+    val durationSeconds: Long = 0L,
+    val pausedAt: String? = null,
+    val updatedAt: String? = null,
+    val source: String? = null,
+    val title: String? = null,
+    val episodeTitle: String? = null,
+    val backdropPath: String? = null,
+    val posterPath: String? = null,
+    val id: String? = null
+)
+
+/**
+ * Watched episode record (previously in SupabaseApi, now standalone)
+ */
+data class WatchedEpisodeRecord(
+    val userId: String? = null,
+    val profileId: String? = null,
+    val showTmdbId: Int? = null,
+    val showTraktId: Int? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val traktEpisodeId: Int? = null,
+    val tmdbEpisodeId: Int? = null,
+    val watched: Boolean = false,
+    val watchedAt: String? = null,
+    val updatedAt: String? = null,
+    val source: String? = null,
+    val title: String? = null,
+    val episodeTitle: String? = null
+)
+
+/**
+ * Watched movie record (previously in SupabaseApi, now standalone)
+ */
+data class WatchedMovieRecord(
+    val userId: String? = null,
+    val profileId: String? = null,
+    val showTmdbId: Int? = null,
+    val showTraktId: Int? = null,
+    val watched: Boolean = false,
+    val watchedAt: String? = null,
+    val updatedAt: String? = null,
+    val source: String? = null,
+    val title: String? = null
+)
+
+/**
+ * TraktSyncService - Manages synchronization between Trakt and local storage
  *
- * This service ensures Supabase is the source of truth for watched state:
- * 1. Full sync: Imports all watched data from Trakt to Supabase
+ * No Supabase — Trakt is the only cloud service:
+ * 1. Full sync: Imports all watched data from Trakt to local cache
  * 2. Incremental sync: Uses Trakt's last_activities to sync only changes
  * 3. Two-way sync: Pushes local changes to Trakt
- *
- * Key tables in Supabase:
- * - watched_movies: Movies marked as watched
- * - watched_episodes: Episodes marked as watched
- * - episode_progress: In-progress playback state
- * - sync_state: Tracks sync timestamps and status
  */
 @Singleton
 class TraktSyncService @Inject constructor(
     @ApplicationContext private val context: Context,
     private val traktApi: TraktApi,
-    private val supabaseApi: SupabaseApi,
     private val authRepository: AuthRepository,
     private val outboxRepository: TraktOutboxRepository,
     private val profileManager: ProfileManager
@@ -70,14 +124,12 @@ class TraktSyncService @Inject constructor(
     private val _syncEvents = MutableSharedFlow<SyncStatus>(extraBufferCapacity = 1)
     val syncEvents: SharedFlow<SyncStatus> = _syncEvents.asSharedFlow()
 
-    private val supabaseAuthMutex = Mutex()
-
     // Profile-scoped DataStore keys (must match TraktRepository for token sharing)
     private fun accessTokenKey() = profileManager.profileStringKey("trakt_access_token")
     private fun refreshTokenKey() = profileManager.profileStringKey("trakt_refresh_token")
     private fun expiresAtKey() = profileManager.profileLongKey("trakt_expires_at")
 
-    // In-memory cache for current session (fallback if Supabase fails)
+    // In-memory cache for current session
     private var cachedWatchedMovies: List<WatchedMovieRecord>? = null
     private var cachedWatchedEpisodes: List<WatchedEpisodeRecord>? = null
 
@@ -98,7 +150,7 @@ class TraktSyncService @Inject constructor(
     }
 
     /**
-     * Perform a full sync from Trakt to Supabase
+     * Perform a full sync from Trakt to local cache
      * This imports ALL watched movies and episodes, overwriting existing data
      */
 
@@ -115,16 +167,6 @@ class TraktSyncService @Inject constructor(
         try {
             val userId = getUserId()
             val localUserId = userId ?: "local"
-            // Allow sync even if Supabase auth is missing - we'll use local cache
-            val hasSupabase = userId != null && getSupabaseAuth() != null
-
-            if (hasSupabase) {
-                try {
-                    val supabaseUserId = userId ?: return@withContext SyncResult.Error("Not logged in")
-                    updateSyncState(supabaseUserId, syncInProgress = true, lastError = null)
-                } catch (e: Exception) {
-                }
-            }
 
             var totalMovies = 0
             var totalEpisodes = 0
@@ -140,24 +182,6 @@ class TraktSyncService @Inject constructor(
             // Update cache
             cachedWatchedMovies = movieRecords
 
-            if (hasSupabase) {
-                movieRecords.chunked(100).forEachIndexed { index, chunk ->
-                    _syncProgress.value = SyncProgress(
-                        status = SyncStatus.SYNCING_MOVIES,
-                        message = "Saving movies... (${index * 100 + chunk.size}/${movieRecords.size})",
-                        moviesProcessed = index * 100 + chunk.size,
-                        totalMovies = movieRecords.size
-                    )
-                    if (chunk.isNotEmpty()) {
-                        try {
-                            executeSupabaseCall("bulk upsert watched movies") { auth ->
-                                supabaseApi.bulkUpsertWatchedMovies(auth, records = chunk)
-                            }
-                        } catch (e: Exception) {
-                        }
-                    }
-                }
-            }
             totalMovies = movieRecords.size
 
             _syncProgress.value = SyncProgress(
@@ -186,26 +210,6 @@ class TraktSyncService @Inject constructor(
             // Update cache
             cachedWatchedEpisodes = episodeRecords
 
-            if (hasSupabase) {
-                episodeRecords.chunked(100).forEachIndexed { index, chunk ->
-                    _syncProgress.value = SyncProgress(
-                        status = SyncStatus.SYNCING_EPISODES,
-                        message = "Saving episodes... (${index * 100 + chunk.size}/${episodeRecords.size})",
-                        moviesProcessed = totalMovies,
-                        totalMovies = totalMovies,
-                        episodesProcessed = index * 100 + chunk.size,
-                        totalEpisodes = episodeRecords.size
-                    )
-                    if (chunk.isNotEmpty()) {
-                        try {
-                            executeSupabaseCall("bulk upsert watched episodes") { auth ->
-                                supabaseApi.bulkUpsertWatchedEpisodes(auth, records = chunk)
-                            }
-                        } catch (e: Exception) {
-                        }
-                    }
-                }
-            }
             totalEpisodes = episodeRecords.size
 
             _syncProgress.value = SyncProgress(
@@ -225,47 +229,7 @@ class TraktSyncService @Inject constructor(
                 profileHistorySource("trakt")
             )
 
-            if (hasSupabase) {
-                progressRecords.chunked(100).forEach { chunk ->
-                    chunk.forEach { record ->
-                        try {
-                            executeSupabaseCall("upsert watch history") { auth ->
-                                supabaseApi.upsertWatchHistory(auth = auth, item = record)
-                            }
-                        } catch (e: Exception) {
-                        }
-                    }
-                }
-
-                try {
-                    cleanupTraktPlaybackProgress(localUserId, progressRecords)
-                } catch (e: Exception) {
-                }
-            }
             flushOutbox()
-
-            // Non-critical: fetch last activities for incremental sync optimization
-            // Don't fail the sync if this call fails - data is already synced
-            if (hasSupabase) {
-                try {
-                    val activities = executeTraktCall("last activities") { auth ->
-                        traktApi.getLastActivities(auth, clientId)
-                    }
-                    val activitiesJson = gson.toJson(activities)
-                    val supabaseUserId = userId ?: return@withContext SyncResult.Success(totalMovies, totalEpisodes)
-                    updateSyncState(
-                        userId = supabaseUserId,
-                        lastSyncAt = Instant.now().toString(),
-                        lastFullSyncAt = Instant.now().toString(),
-                        lastTraktActivitiesJson = activitiesJson,
-                        moviesSynced = totalMovies,
-                        episodesSynced = totalEpisodes,
-                        syncInProgress = false
-                    )
-                } catch (e: Exception) {
-                    // Silently ignore - sync data is already cached locally
-                }
-            }
 
             _syncProgress.value = SyncProgress(
                 status = SyncStatus.COMPLETED,
@@ -285,18 +249,6 @@ class TraktSyncService @Inject constructor(
                 message = "Sync failed: ${e.message}"
             )
 
-            try {
-                val userId = getUserId()
-                if (userId != null && getSupabaseAuth() != null) {
-                    updateSyncState(
-                        userId = userId,
-                        syncInProgress = false,
-                        lastError = e.message
-                    )
-                }
-            } catch (_: Exception) {
-            }
-
             SyncResult.Error(e.message ?: "Unknown error")
         } finally {
             _isSyncing.value = false
@@ -304,205 +256,22 @@ class TraktSyncService @Inject constructor(
     }
 
     /**
-     * Perform incremental sync using Trakt's last_activities
-     * Only syncs data that has changed since last sync
+     * Perform incremental sync — without Supabase sync state, this
+     * just delegates to full sync. Could be optimized later with local
+     * last-activities tracking.
      */
-
     suspend fun performIncrementalSync(): SyncResult = withContext(Dispatchers.IO) {
-        if (_isSyncing.value) {
-            return@withContext SyncResult.Error("Sync already in progress")
-        }
-
-        _isSyncing.value = true
-        _syncProgress.value = SyncProgress(status = SyncStatus.STARTING, message = "Checking for updates...")
-
-        val completionThreshold = Constants.WATCHED_THRESHOLD / 100f
-
-        try {
-            val userId = getUserId()
-            val hasSupabase = userId != null && getSupabaseAuth() != null
-            if (!hasSupabase) {
-                _isSyncing.value = false
-                return@withContext performFullSync()
-            }
-            val safeUserId = userId ?: return@withContext SyncResult.Error("Not logged in")
-
-            var syncState: SyncStateRecord? = null
-            try {
-                val syncStates = executeSupabaseCall("get sync state") { auth ->
-                    supabaseApi.getSyncState(
-                        auth,
-                        userId = "eq.$safeUserId",
-                        profileId = "eq.${activeProfileId()}"
-                    )
-                }
-                syncState = syncStates.firstOrNull()
-            } catch (e: Exception) {
-            }
-
-            if (syncState == null || (syncState.lastTraktActivitiesJson == null && syncState.lastTraktActivities == null)) {
-                _isSyncing.value = false
-                return@withContext performFullSync()
-            }
-
-            val currentActivities = executeTraktCall("last activities") { auth ->
-                traktApi.getLastActivities(auth, clientId)
-            }
-            val previousActivitiesJson = syncState.lastTraktActivitiesJson ?: syncState.lastTraktActivities
-            val previousActivities = gson.fromJson(previousActivitiesJson, TraktLastActivities::class.java)
-            val lastSyncAt = syncState.lastSyncAt
-
-            var moviesUpdated = 0
-            var episodesUpdated = 0
-
-            val moviesChanged = hasChanged(
-                previousActivities.movies?.watchedAt,
-                currentActivities.movies?.watchedAt
-            )
-            if (moviesChanged) {
-                _syncProgress.value = SyncProgress(
-                    status = SyncStatus.SYNCING_MOVIES,
-                    message = "Syncing movie changes..."
-                )
-                val historyMovies = fetchAllHistoryMovies(startAt = lastSyncAt)
-                val (movieRecords, filteredMovies) = buildWatchedMoviesFromHistory(safeUserId, historyMovies)
-
-                movieRecords.chunked(100).forEach { chunk ->
-                    if (chunk.isNotEmpty()) {
-                        try {
-                            executeSupabaseCall("bulk upsert watched movies") { auth ->
-                                supabaseApi.bulkUpsertWatchedMovies(auth, records = chunk)
-                            }
-                        } catch (e: Exception) {
-                        }
-                    }
-                }
-                moviesUpdated = movieRecords.size
-            }
-
-            val episodesChanged = hasChanged(
-                previousActivities.episodes?.watchedAt,
-                currentActivities.episodes?.watchedAt
-            )
-            if (episodesChanged) {
-                _syncProgress.value = SyncProgress(
-                    status = SyncStatus.SYNCING_EPISODES,
-                    message = "Syncing episode changes..."
-                )
-                val historyEpisodes = fetchAllHistoryEpisodes(startAt = lastSyncAt)
-                val (episodeRecords, filteredEpisodes) = buildWatchedEpisodesFromHistory(safeUserId, historyEpisodes)
-
-                episodeRecords.chunked(100).forEach { chunk ->
-                    if (chunk.isNotEmpty()) {
-                        try {
-                            executeSupabaseCall("bulk upsert watched episodes") { auth ->
-                                supabaseApi.bulkUpsertWatchedEpisodes(auth, records = chunk)
-                            }
-                        } catch (e: Exception) {
-                        }
-                    }
-                }
-                episodesUpdated = episodeRecords.size
-            }
-
-            val playbackChanged = hasChanged(
-                previousActivities.episodes?.pausedAt,
-                currentActivities.episodes?.pausedAt
-            ) || hasChanged(
-                previousActivities.movies?.pausedAt,
-                currentActivities.movies?.pausedAt
-            )
-            if (playbackChanged) {
-                _syncProgress.value = SyncProgress(
-                    status = SyncStatus.SYNCING_PROGRESS,
-                    message = "Syncing playback progress..."
-                )
-                val playbackItems = fetchAllPlaybackProgress()
-                val progressRecords = buildWatchHistoryFromPlayback(
-                    safeUserId,
-                    playbackItems,
-                    completionThreshold,
-                    profileHistorySource("trakt")
-                )
-
-                progressRecords.chunked(100).forEach { chunk ->
-                    chunk.forEach { record ->
-                        try {
-                            executeSupabaseCall("upsert watch history") { auth ->
-                                supabaseApi.upsertWatchHistory(auth = auth, item = record)
-                            }
-                        } catch (e: Exception) {
-                        }
-                    }
-                }
-
-                try {
-                    cleanupTraktPlaybackProgress(safeUserId, progressRecords)
-                } catch (e: Exception) {
-                }
-            }
-
-            flushOutbox()
-
-            try {
-                updateSyncState(
-                    userId = safeUserId,
-                    lastSyncAt = Instant.now().toString(),
-                    lastTraktActivitiesJson = gson.toJson(currentActivities),
-                    moviesSynced = (syncState?.moviesSynced ?: 0) + moviesUpdated,
-                    episodesSynced = (syncState?.episodesSynced ?: 0) + episodesUpdated,
-                    syncInProgress = false
-                )
-            } catch (e: Exception) {
-            }
-
-            _syncProgress.value = SyncProgress(
-                status = SyncStatus.COMPLETED,
-                message = if (moviesUpdated == 0 && episodesUpdated == 0) "Already up to date" else "Sync completed!",
-                moviesProcessed = moviesUpdated,
-                episodesProcessed = episodesUpdated
-            )
-            _syncEvents.tryEmit(SyncStatus.COMPLETED)
-
-            SyncResult.Success(moviesUpdated, episodesUpdated)
-
-        } catch (e: Exception) {
-            _syncProgress.value = SyncProgress(
-                status = SyncStatus.ERROR,
-                message = "Sync failed: ${e.message}"
-            )
-            SyncResult.Error(e.message ?: "Unknown error")
-        } finally {
-            _isSyncing.value = false
-        }
+        performFullSync()
     }
 
     /**
-     * Sync a single movie as watched to Supabase and Trakt
+     * Sync a single movie as watched to Trakt
      */
     suspend fun markMovieWatched(tmdbId: Int, traktId: Int? = null): Boolean = withContext(Dispatchers.IO) {
         try {
-            val userId = getUserId()
-            val hasSupabase = userId != null && getSupabaseAuth() != null
             val traktAuth = getAuthHeader()
 
-            val now = Instant.now().toString()
-
-            // 1. Write to Supabase first (source of truth) when available
-            if (hasSupabase) {
-                val record = WatchedMovieRecord(
-                    userId = userId ?: "local",
-                    profileId = activeProfileId(),
-                    tmdbId = tmdbId,
-                    traktId = traktId,
-                    watchedAt = now
-                )
-                executeSupabaseCall("mark movie watched") { auth ->
-                    supabaseApi.markMovieWatched(auth, record = record)
-                }
-            }
-
-            // 2. Sync to Trakt (queue on failure or if offline)
+            // Sync to Trakt (queue on failure or if offline)
             val traktSyncOk = if (traktAuth != null) {
                 try {
                     traktApi.addToHistory(
@@ -526,32 +295,17 @@ class TraktSyncService @Inject constructor(
                 )
             }
 
-            // 3. Remove from Supabase watch_history (no longer in-progress)
-            if (hasSupabase) {
-                try {
-                    executeSupabaseCall("delete watch history (movie)") { auth ->
-                        supabaseApi.deleteWatchHistory(
-                            auth = auth,
-                            userId = "eq.$userId",
-                            profileId = "eq.${activeProfileId()}",
-                            showTmdbId = "eq.$tmdbId",
-                            mediaType = "eq.movie"
-                        )
-                    }
-                } catch (_: Exception) {}
-            }
-
-            // 4. Remove playback item from Trakt so it disappears from Continue Watching
+            // Remove playback item from Trakt so it disappears from Continue Watching
             removePlaybackForContent(traktAuth, tmdbId, MediaType.MOVIE)
 
-            traktSyncOk || hasSupabase
+            traktSyncOk
         } catch (e: Exception) {
             false
         }
     }
 
     /**
-     * Sync a single episode as watched to Supabase and Trakt
+     * Sync a single episode as watched to Trakt
      */
     suspend fun markEpisodeWatched(
         showTmdbId: Int,
@@ -560,39 +314,9 @@ class TraktSyncService @Inject constructor(
         showTraktId: Int? = null
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            val userId = getUserId()
             val traktAuth = getAuthHeader()
 
-            // 1. Write to Supabase first (source of truth) when available
-            //    Uses RPC function (direct SQL) instead of PostgREST table endpoint
-            //    to avoid silent write drops on rapid sequential inserts.
-            //    Gate only on userId (not getSupabaseAuth) — let executeSupabaseCall
-            //    handle token refresh so expired sessions don't silently skip writes.
-            if (userId != null) {
-                try {
-                    val now = Instant.now().toString()
-                    executeSupabaseCall("mark episode watched") { auth ->
-                        supabaseApi.markEpisodeWatched(
-                            auth,
-                            record = WatchedEpisodeRecord(
-                                userId = userId,
-                                profileId = activeProfileId(),
-                                showTmdbId = showTmdbId,
-                                season = season,
-                                episode = episode,
-                                showTraktId = showTraktId,
-                                watched = true,
-                                watchedAt = now,
-                                source = "Streame",
-                                updatedAt = now
-                            )
-                        )
-                    }
-                } catch (_: Exception) {}
-            }
-
-            // 2. Sync to Trakt (queue on failure or if offline)
-            // Use shows format with nested seasons/episodes for proper episode identification
+            // Sync to Trakt (queue on failure or if offline)
             val traktSyncOk = if (traktAuth != null) {
                 try {
                     traktApi.addToHistory(
@@ -631,54 +355,23 @@ class TraktSyncService @Inject constructor(
                 )
             }
 
-            // 3. Remove from Supabase watch_history (no longer in-progress)
-            if (userId != null) {
-                try {
-                    executeSupabaseCall("delete watch history (episode)") { auth ->
-                        supabaseApi.deleteWatchHistory(
-                            auth = auth,
-                            userId = "eq.$userId",
-                            profileId = "eq.${activeProfileId()}",
-                            showTmdbId = "eq.$showTmdbId",
-                            mediaType = "eq.tv",
-                            season = "eq.$season",
-                            episode = "eq.$episode"
-                        )
-                    }
-                } catch (_: Exception) {}
-            }
-
-            // 4. Remove playback item from Trakt so it disappears from Continue Watching
+            // Remove playback item from Trakt so it disappears from Continue Watching
             removePlaybackForContent(traktAuth, showTmdbId, MediaType.TV)
 
-            traktSyncOk || userId != null
+            traktSyncOk
         } catch (e: Exception) {
             false
         }
     }
 
     /**
-     * Mark movie as unwatched in Supabase and Trakt
+     * Mark movie as unwatched in Trakt
      */
     suspend fun markMovieUnwatched(tmdbId: Int): Boolean = withContext(Dispatchers.IO) {
         try {
-            val userId = getUserId()
-            val hasSupabase = userId != null && getSupabaseAuth() != null
             val traktAuth = getAuthHeader()
 
-            // 1. Delete from Supabase
-            if (hasSupabase) {
-                executeSupabaseCall("delete watched movie") { auth ->
-                    supabaseApi.deleteWatchedMovie(
-                        auth,
-                        userId = "eq.$userId",
-                        profileId = "eq.${activeProfileId()}",
-                        tmdbId = "eq.$tmdbId"
-                    )
-                }
-            }
-
-            // 2. Remove from Trakt
+            // Remove from Trakt
             if (traktAuth != null) {
                 traktApi.removeFromHistory(
                     traktAuth, clientId, "2",
@@ -686,36 +379,20 @@ class TraktSyncService @Inject constructor(
                 )
             }
 
-            traktAuth != null || hasSupabase
+            traktAuth != null
         } catch (e: Exception) {
             false
         }
     }
 
     /**
-     * Mark episode as unwatched in Supabase and Trakt
+     * Mark episode as unwatched in Trakt
      */
     suspend fun markEpisodeUnwatched(showTmdbId: Int, season: Int, episode: Int): Boolean = withContext(Dispatchers.IO) {
         try {
-            val userId = getUserId()
-            val hasSupabase = userId != null && getSupabaseAuth() != null
             val traktAuth = getAuthHeader()
 
-            // 1. Delete from Supabase
-            if (hasSupabase) {
-                executeSupabaseCall("delete watched episode") { auth ->
-                    supabaseApi.deleteWatchedEpisode(
-                        auth,
-                        userId = "eq.$userId",
-                        profileId = "eq.${activeProfileId()}",
-                        tmdbId = "eq.$showTmdbId",
-                        season = "eq.$season",
-                        episode = "eq.$episode"
-                    )
-                }
-            }
-
-            // 2. Remove from Trakt
+            // Remove from Trakt
             if (traktAuth != null) {
                 traktApi.removeFromHistory(
                     traktAuth, clientId, "2",
@@ -735,14 +412,14 @@ class TraktSyncService @Inject constructor(
                 )
             }
 
-            traktAuth != null || hasSupabase
+            traktAuth != null
         } catch (e: Exception) {
             false
         }
     }
 
     /**
-     * Save playback progress to Supabase
+     * Save playback progress — no-op, Trakt handles playback progress directly
      */
     suspend fun savePlaybackProgress(
         tmdbId: Int,
@@ -759,259 +436,69 @@ class TraktSyncService @Inject constructor(
         episodeTitle: String? = null,
         backdropPath: String? = null,
         posterPath: String? = null
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val userId = getUserId() ?: return@withContext false
-            if (getSupabaseAuth() == null) return@withContext false
-
-            val record = WatchHistoryRecord(
-                userId = userId,
-                profileId = activeProfileId(),
-                mediaType = mediaType,
-                showTmdbId = tmdbId,
-                showTraktId = showTraktId,
-                season = season,
-                episode = episode,
-                traktEpisodeId = traktEpisodeId,
-                tmdbEpisodeId = tmdbEpisodeId,
-                progress = progress,
-                positionSeconds = positionSeconds,
-                durationSeconds = durationSeconds,
-                pausedAt = Instant.now().toString(),
-                updatedAt = Instant.now().toString(),
-                source = profileHistorySource("Streame"),
-                title = title,
-                episodeTitle = episodeTitle,
-                backdropPath = backdropPath,
-                posterPath = posterPath
-            )
-
-            executeSupabaseCall("upsert watch history (progress)") { auth ->
-                supabaseApi.upsertWatchHistory(auth = auth, item = record)
-            }
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    ): Boolean = true
 
     /**
-     * Get all watched movies from Supabase
+     * Get all watched movies from local cache
      */
     suspend fun getWatchedMovies(): Set<Int> = withContext(Dispatchers.IO) {
-        try {
-            val userId = getUserId()
-            val hasSupabase = userId != null && getSupabaseAuth() != null
-            if (!hasSupabase) {
-                return@withContext cachedWatchedMovies
-                    ?.filter { recordBelongsToActiveProfile(it.profileId) }
-                    ?.map { it.tmdbId }
-                    ?.toSet()
-                    ?: emptySet()
-            }
-
-            // Paginate to get ALL watched movies (PostgREST default limit is 1000)
-            val allRecords = mutableListOf<WatchedMovieRecord>()
-            val pageSize = 1000
-            var offset = 0
-            while (true) {
-                val page = executeSupabaseCall("get watched movies page $offset") { auth ->
-                    supabaseApi.getWatchedMovies(
-                        auth,
-                        userId = "eq.$userId",
-                        profileId = "eq.${activeProfileId()}",
-                        offset = offset,
-                        limit = pageSize
-                    )
-                }
-                allRecords.addAll(page)
-                if (page.size < pageSize) break // Last page
-                offset += pageSize
-            }
-            if (allRecords.isEmpty() && cachedWatchedMovies != null) {
-                return@withContext cachedWatchedMovies
-                    ?.filter { recordBelongsToActiveProfile(it.profileId) }
-                    ?.map { it.tmdbId }
-                    ?.toSet()
-                    ?: emptySet()
-            }
-            allRecords.filter { recordBelongsToActiveProfile(it.profileId) }.map { it.tmdbId }.toSet()
-        } catch (e: Exception) {
-            emptySet()
-        }
+        cachedWatchedMovies
+            ?.filter { recordBelongsToActiveProfile(it.profileId) }
+            ?.mapNotNull { it.showTmdbId }
+            ?.toSet()
+            ?: emptySet()
     }
 
     /**
-     * Get all watched episodes from Supabase
+     * Get all watched episodes from local cache
      * Returns set of keys in format "show_tmdb:tmdbId:season:episode" (and trakt variants)
-     * Paginates to get ALL records, bypassing PostgREST 1000-row default limit.
      */
     suspend fun getWatchedEpisodes(): Set<String> = withContext(Dispatchers.IO) {
-        try {
-            val userId = getUserId()
-            val hasSupabase = userId != null && getSupabaseAuth() != null
-            if (!hasSupabase) {
-                val cached = cachedWatchedEpisodes ?: return@withContext emptySet()
-                val keys = mutableSetOf<String>()
-                cached.filter { recordBelongsToActiveProfile(it.profileId) }.forEach { record ->
-                    val season = record.season
-                    val episode = record.episode
-                    if (season == null || episode == null) return@forEach
-                    buildEpisodeKey(record.traktEpisodeId, null, null, season, episode)?.let { keys.add(it) }
-                    buildEpisodeKey(null, record.showTraktId, null, season, episode)?.let { keys.add(it) }
-                    buildEpisodeKey(null, null, record.showTmdbId, season, episode)?.let { keys.add(it) }
-                }
-                return@withContext keys
-            }
-
-            // Paginate to get ALL watched episodes (PostgREST default limit is 1000)
-            val allRecords = mutableListOf<WatchedEpisodeRecord>()
-            val pageSize = 1000
-            var offset = 0
-            while (true) {
-                val page = executeSupabaseCall("get watched episodes page $offset") { auth ->
-                    supabaseApi.getWatchedEpisodes(
-                        auth,
-                        userId = "eq.$userId",
-                        profileId = "eq.${activeProfileId()}",
-                        offset = offset,
-                        limit = pageSize
-                    )
-                }
-                allRecords.addAll(page)
-                if (page.size < pageSize) break // Last page
-                offset += pageSize
-            }
-
-            val keys = mutableSetOf<String>()
-            allRecords.filter { recordBelongsToActiveProfile(it.profileId) }.forEach { record ->
-                val season = record.season
-                val episode = record.episode
-                if (season == null || episode == null) return@forEach
-
-                buildEpisodeKey(record.traktEpisodeId, null, null, season, episode)?.let { keys.add(it) }
-                buildEpisodeKey(null, record.showTraktId, null, season, episode)?.let { keys.add(it) }
-                buildEpisodeKey(null, null, record.showTmdbId, season, episode)?.let { keys.add(it) }
-            }
-            if (keys.isEmpty() && cachedWatchedEpisodes != null) {
-                val cachedKeys = mutableSetOf<String>()
-                cachedWatchedEpisodes?.filter { recordBelongsToActiveProfile(it.profileId) }?.forEach { record ->
-                    val season = record.season
-                    val episode = record.episode
-                    if (season == null || episode == null) return@forEach
-                    buildEpisodeKey(record.traktEpisodeId, null, null, season, episode)?.let { cachedKeys.add(it) }
-                    buildEpisodeKey(null, record.showTraktId, null, season, episode)?.let { cachedKeys.add(it) }
-                    buildEpisodeKey(null, null, record.showTmdbId, season, episode)?.let { cachedKeys.add(it) }
-                }
-                return@withContext cachedKeys
-            }
-            keys
-        } catch (e: Exception) {
-            emptySet()
+        val cached = cachedWatchedEpisodes ?: return@withContext emptySet()
+        val keys = mutableSetOf<String>()
+        cached.filter { recordBelongsToActiveProfile(it.profileId) }.forEach { record ->
+            val season = record.season
+            val episode = record.episode
+            if (season == null || episode == null) return@forEach
+            buildEpisodeKey(record.traktEpisodeId, null, null, season, episode)?.let { keys.add(it) }
+            buildEpisodeKey(null, record.showTraktId, null, season, episode)?.let { keys.add(it) }
+            buildEpisodeKey(null, null, record.showTmdbId, season, episode)?.let { keys.add(it) }
         }
+        keys
     }
 
     /**
-     * Get watched episodes for a specific show — direct Supabase query, no pagination issues.
+     * Get watched episodes for a specific show from local cache
      */
     suspend fun getWatchedEpisodesForShow(showTmdbId: Int): Set<String> = withContext(Dispatchers.IO) {
-        try {
-            val userId = getUserId()
-            val hasSupabase = userId != null && getSupabaseAuth() != null
-            if (!hasSupabase) return@withContext emptySet()
-
-            val records = executeSupabaseCall("get watched episodes for show $showTmdbId") { auth ->
-                supabaseApi.getWatchedEpisodesForShow(
-                    auth,
-                    userId = "eq.$userId",
-                    profileId = "eq.${activeProfileId()}",
-                    tmdbId = "eq.$showTmdbId"
-                )
-            }
-            val keys = mutableSetOf<String>()
-            records.forEach { record ->
-                val season = record.season
-                val episode = record.episode
-                buildEpisodeKey(record.traktEpisodeId, null, null, season, episode)?.let { keys.add(it) }
-                buildEpisodeKey(null, record.showTraktId, null, season, episode)?.let { keys.add(it) }
-                buildEpisodeKey(null, null, record.showTmdbId, season, episode)?.let { keys.add(it) }
-            }
-            keys
-        } catch (e: Exception) {
-            emptySet()
+        val cached = cachedWatchedEpisodes ?: return@withContext emptySet()
+        val keys = mutableSetOf<String>()
+        cached.filter { recordBelongsToActiveProfile(it.profileId) && it.showTmdbId == showTmdbId }.forEach { record ->
+            val season = record.season
+            val episode = record.episode
+            buildEpisodeKey(record.traktEpisodeId, null, null, season, episode)?.let { keys.add(it) }
+            buildEpisodeKey(null, record.showTraktId, null, season, episode)?.let { keys.add(it) }
+            buildEpisodeKey(null, null, record.showTmdbId, season, episode)?.let { keys.add(it) }
         }
+        keys
     }
 
     /**
-     * Get watched episodes with timestamps for Up Next ordering.
+     * Get watched episodes with timestamps from local cache
      */
     suspend fun getWatchedEpisodesDetailed(): List<WatchedEpisodeRecord> = withContext(Dispatchers.IO) {
-        // Use in-memory cache if available (populated by sync)
-        cachedWatchedEpisodes?.let {
-             return@withContext it.filter { record -> recordBelongsToActiveProfile(record.profileId) }
-        }
-
-        try {
-            val userId = getUserId() ?: return@withContext emptyList()
-            if (getSupabaseAuth() == null) return@withContext emptyList()
-            executeSupabaseCall("get watched episodes detailed") { auth ->
-                supabaseApi.getWatchedEpisodes(
-                    auth,
-                    userId = "eq.$userId",
-                    profileId = "eq.${activeProfileId()}"
-                )
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
+        cachedWatchedEpisodes?.filter { record -> recordBelongsToActiveProfile(record.profileId) } ?: emptyList()
     }
 
     /**
-     * Get in-progress items from Supabase for Continue Watching
+     * Get in-progress items — returns empty (Trakt playback API handles this)
      */
-    suspend fun getInProgressItems(): List<WatchHistoryRecord> = withContext(Dispatchers.IO) {
-        try {
-            val userId = getUserId() ?: return@withContext emptyList()
-            if (getSupabaseAuth() == null) return@withContext emptyList()
-
-            // PostgREST requires "eq." prefix for equality filtering
-            val records = executeSupabaseCall("get in-progress watch history") { auth ->
-                supabaseApi.getWatchHistory(
-                    auth,
-                    userId = "eq.$userId",
-                    profileId = "eq.${activeProfileId()}",
-                    order = "updated_at.desc",
-                    limit = 500
-                )
-            }
-            val completionThreshold = Constants.WATCHED_THRESHOLD / 100f
-            records.filter { it.progress > 0f && it.progress < completionThreshold }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
+    suspend fun getInProgressItems(): List<WatchHistoryRecord> = emptyList()
 
     /**
-     * Get last sync time
+     * Get last sync time — no longer tracked without Supabase
      */
-    suspend fun getLastSyncTime(): String? = withContext(Dispatchers.IO) {
-        try {
-            val userId = getUserId() ?: return@withContext null
-            if (getSupabaseAuth() == null) return@withContext null
-
-            // PostgREST requires "eq." prefix for equality filtering
-            val syncStates = executeSupabaseCall("get sync state (last sync)") { auth ->
-                supabaseApi.getSyncState(
-                    auth,
-                    userId = "eq.$userId",
-                    profileId = "eq.${activeProfileId()}"
-                )
-            }
-            syncStates.firstOrNull()?.lastSyncAt
-        } catch (e: Exception) {
-            null
-        }
-    }
+    suspend fun getLastSyncTime(): String? = null
 
     // ========== Private Helpers ==========
 
@@ -1171,8 +658,8 @@ class TraktSyncService @Inject constructor(
                 byTmdbId[tmdbId] = WatchedMovieRecord(
                     userId = userId,
                     profileId = activeProfileId(),
-                    tmdbId = tmdbId,
-                    traktId = movie.ids.trakt,
+                    showTmdbId = tmdbId,
+                    showTraktId = movie.ids.trakt,
                     watchedAt = watchedAt
                 )
             } else {
@@ -1199,8 +686,8 @@ class TraktSyncService @Inject constructor(
                 byTmdbId[tmdbId] = WatchedMovieRecord(
                     userId = userId,
                     profileId = activeProfileId(),
-                    tmdbId = tmdbId,
-                    traktId = movie.ids.trakt,
+                    showTmdbId = tmdbId,
+                    showTraktId = movie.ids.trakt,
                     watchedAt = watchedAt
                 )
             } else {
@@ -1494,68 +981,6 @@ class TraktSyncService @Inject constructor(
         return records
     }
 
-    private suspend fun cleanupTraktPlaybackProgress(
-        userId: String,
-        current: List<WatchHistoryRecord>
-    ) {
-        val currentKeys = current.mapNotNull { buildWatchHistoryKey(it) }.toSet()
-        val existing = fetchAllSupabaseWatchHistory(userId, "eq.${profileHistorySource("trakt")}")
-        val stale = existing.filter { record ->
-            val key = buildWatchHistoryKey(record)
-            key != null && !currentKeys.contains(key)
-        }
-
-        if (stale.isEmpty()) return
-
-        val semaphore = Semaphore(5)
-        val staleIds = stale.mapNotNull { it.id }
-        coroutineScope {
-            staleIds.chunked(50).map { chunk ->
-                async {
-                    semaphore.withPermit {
-                        try {
-                            executeSupabaseCall("delete stale playback batch") { auth ->
-                                supabaseApi.deleteWatchHistoryByIds(
-                                    auth = auth,
-                                    idIn = "in.(${chunk.joinToString(",")})"
-                                )
-                            }
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                        }
-                    }
-                }
-            }.awaitAll()
-        }
-
-    }
-
-    private suspend fun fetchAllSupabaseWatchHistory(
-        userId: String,
-        source: String?
-    ): List<WatchHistoryRecord> {
-        val all = mutableListOf<WatchHistoryRecord>()
-        var offset = 0
-        val limit = 500
-
-        while (true) {
-            val page = executeSupabaseCall("get watch history page ${offset / limit + 1}") { auth ->
-                supabaseApi.getWatchHistory(
-                    auth = auth,
-                    userId = "eq.$userId",
-                    source = source,
-                    order = "updated_at.desc",
-                    limit = limit,
-                    offset = offset
-                )
-            }
-            if (page.isEmpty()) break
-            all.addAll(page)
-            offset += page.size
-        }
-
-        return all
-    }
 
     private suspend fun flushOutbox() {
         val items = outboxRepository.loadAll()
@@ -1666,48 +1091,6 @@ class TraktSyncService @Inject constructor(
         }
     }
 
-    private suspend fun syncPlaybackProgress(userId: String) {
-        val completionThreshold = Constants.WATCHED_THRESHOLD / 100f
-        val playbackItems = fetchAllPlaybackProgress()
-        val progressRecords = buildWatchHistoryFromPlayback(userId, playbackItems, completionThreshold, "trakt")
-
-        progressRecords.forEach { record ->
-            executeSupabaseCall("upsert watch history") { auth ->
-                supabaseApi.upsertWatchHistory(auth = auth, item = record)
-            }
-        }
-
-        cleanupTraktPlaybackProgress(userId, progressRecords)
-    }
-
-    private suspend fun updateSyncState(
-        userId: String,
-        lastSyncAt: String? = null,
-        lastFullSyncAt: String? = null,
-        lastTraktActivities: String? = null,
-        lastTraktActivitiesJson: String? = null,
-        moviesSynced: Int? = null,
-        episodesSynced: Int? = null,
-        syncInProgress: Boolean? = null,
-        lastError: String? = null
-    ) {
-        val record = SyncStateRecord(
-            userId = userId,
-            profileId = activeProfileId(),
-            lastSyncAt = lastSyncAt,
-            lastFullSyncAt = lastFullSyncAt,
-            lastTraktActivities = lastTraktActivities,
-            lastTraktActivitiesJson = lastTraktActivitiesJson,
-            moviesSynced = moviesSynced ?: 0,
-            episodesSynced = episodesSynced ?: 0,
-            syncInProgress = syncInProgress ?: false,
-            lastError = lastError,
-            updatedAt = Instant.now().toString()
-        )
-        executeSupabaseCall("upsert sync state") { auth ->
-            supabaseApi.upsertSyncState(auth, record = record)
-        }
-    }
 
     private fun hasChanged(previous: String?, current: String?): Boolean {
         if (previous == null || current == null) return true
@@ -1731,33 +1114,6 @@ class TraktSyncService @Inject constructor(
         }
     }
 
-    private suspend fun <T> executeSupabaseCall(
-        operation: String,
-        block: suspend (String) -> T
-    ): T {
-        // Try getting auth, force-refresh if initial attempt fails
-        var auth = getSupabaseAuth()
-        if (auth == null) {
-            val refreshed = supabaseAuthMutex.withLock {
-                authRepository.refreshAccessToken()
-            }
-            auth = if (!refreshed.isNullOrBlank()) "Bearer $refreshed" else null
-        }
-        if (auth == null) throw IllegalStateException("Supabase auth failed")
-        return try {
-            block(auth)
-        } catch (e: HttpException) {
-            if (e.code() == 401) {
-                val refreshed = supabaseAuthMutex.withLock {
-                    authRepository.refreshAccessToken()
-                }
-                if (!refreshed.isNullOrBlank()) {
-                    return block("Bearer $refreshed")
-                }
-            }
-            throw e
-        }
-    }
 
     private suspend fun getAuthHeader(): String? {
         val token = refreshTokenIfNeeded(force = false) ?: return null
@@ -1769,12 +1125,6 @@ class TraktSyncService @Inject constructor(
         return authRepository.getCurrentUserId()
     }
 
-    private suspend fun getSupabaseAuth(): String? {
-        val token = authRepository.getAccessToken()
-        if (!token.isNullOrBlank()) return "Bearer $token"
-        val refreshed = authRepository.refreshAccessToken()
-        return refreshed?.let { "Bearer $it" }
-    }
 
     private suspend fun refreshTokenIfNeeded(force: Boolean): String? {
         val prefs = context.traktDataStore.data.first()

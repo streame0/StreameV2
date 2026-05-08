@@ -5,11 +5,13 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.os.Build
+import java.security.Security
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
+import androidx.work.BackoffPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
@@ -24,9 +26,6 @@ import coil.memory.MemoryCache
 import com.streame.tv.network.OkHttpProvider
 import com.streame.tv.data.repository.AuthRepository
 import com.streame.tv.data.repository.AuthState
-import com.streame.tv.data.repository.CloudSyncCoordinator
-import com.streame.tv.data.repository.CloudSyncRepository
-import com.streame.tv.data.repository.RealtimeSyncManager
 import com.streame.tv.data.repository.WatchlistRepository
 import com.streame.tv.data.repository.ProfileManager
 import com.streame.tv.util.AppLogger
@@ -46,6 +45,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.streame.tv.util.settingsDataStore
 import java.util.concurrent.TimeUnit
+import org.conscrypt.Conscrypt
 import javax.inject.Inject
 
 /**
@@ -67,27 +67,64 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
     @Inject
     lateinit var authRepository: AuthRepository
     @Inject
-    lateinit var cloudSyncRepository: CloudSyncRepository
-    @Inject
-    lateinit var cloudSyncCoordinator: CloudSyncCoordinator
-    @Inject
-    lateinit var realtimeSyncManager: RealtimeSyncManager
-    @Inject
     lateinit var watchlistRepository: WatchlistRepository
 
     override fun onCreate() {
         super.onCreate()
         instance = this
 
+        runCatching {
+            if (Security.getProvider("Conscrypt") == null) {
+                Security.insertProviderAt(Conscrypt.newProvider(), 1)
+            }
+        }
+
+        // StrictMode in debug builds - disabled for now as it generates too many
+        // logs from existing code (SharedPreferences reads during startup).
+        // Enable if needed for debugging specific issues.
+        // if (BuildConfig.DEBUG) {
+        //     StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder()
+        //         .detectDiskReads()
+        //         .detectDiskWrites()
+        //         .detectNetwork()
+        //         .penaltyLog()
+        //         .build())
+        //     StrictMode.setVmPolicy(StrictMode.VmPolicy.Builder()
+        //         .detectLeakedSqlLiteObjects()
+        //         .detectLeakedClosableObjects()
+        //         .penaltyLog()
+        //         .build())
+        // }
+
         // Global safety net: catch any unhandled exception from coroutines or
-        // Compose that would otherwise crash the process. Log and swallow so
-        // the user sees a brief glitch instead of a full app restart.
+        // Compose that would otherwise crash the process.
+        //
+        // Strategy:
+        // 1. Always log and report to the crash reporter (Sentry/Crashlytics).
+        // 2. For truly fatal errors (OOM, StackOverflow, native crashes),
+        //    forward to the default handler — these indicate the app is in a
+        //    broken state and continuing would be worse than restarting.
+        // 3. For non-fatal errors (Compose rendering glitches, coroutine
+        //    cancellations), swallow them — a momentary UI glitch is better
+        //    than a hard crash on TV (no easy way to restart).
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             AppLogger.e("Uncaught", "Unhandled exception on ${thread.name}", throwable)
-            // Don't re-invoke the default handler — that kills the process.
-            // Swallowing is intentional: a momentary UI glitch is better
-            // than a hard crash on TV (no easy way to restart).
+
+            val cause = throwable.cause
+            val isFatal = throwable is OutOfMemoryError
+                    || throwable is StackOverflowError
+                    || throwable is ThreadDeath
+                    || throwable is VirtualMachineError
+                    || (cause != null && isFatalError(cause))
+
+            if (isFatal) {
+                // Fatal errors — the process is in an unrecoverable state.
+                // Forward to the default handler so the system can restart the app.
+                defaultHandler?.uncaughtException(thread, throwable)
+            }
+            // Non-fatal errors are swallowed intentionally on TV:
+            // a brief glitch is preferable to a full app restart.
         }
 
         // OkHttpProvider.init(context) just stashes the app context; it does
@@ -122,39 +159,11 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             CrashlyticsProvider.initialize()
         }
         // Initialize active profile asynchronously to avoid blocking cold start.
-        // Wire realtime push notification
-        cloudSyncRepository.onPushCompleted = { realtimeSyncManager.markPush() }
 
         appScope.launch {
             runCatching { profileManager.initialize() }
             // Preload watchlist cache in background for instant display
             runCatching { watchlistRepository.getWatchlistItems() }
-            delay(2_500L)
-            cloudSyncCoordinator.start()
-            if (!authRepository.getCurrentUserId().isNullOrBlank()) {
-                // Let first render/navigation settle before cloud restore and
-                // WebSocket work compete with image decode and Compose lists.
-                delay(20_000L)
-                runCatching { cloudSyncRepository.pullFromCloud() }
-                // Start realtime WebSocket listener for instant cross-device sync
-                realtimeSyncManager.start()
-            }
-        }
-
-        // Observe auth state: start realtime on login, stop on logout
-        appScope.launch {
-            authRepository.authState.collectLatest { state ->
-                if (state is AuthState.Authenticated) {
-                    delay(20_000L)
-                    if (!authRepository.getCurrentUserId().isNullOrBlank()) {
-                        cloudSyncCoordinator.start()
-                        realtimeSyncManager.start()
-                    }
-                } else {
-                    realtimeSyncManager.stop()
-                    cloudSyncCoordinator.stop()
-                }
-            }
         }
     }
 
@@ -241,6 +250,7 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
     fun scheduleTraktSyncIfNeeded() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
             .build()
 
         // Use INCREMENTAL sync on startup for fast app launch
@@ -249,6 +259,7 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             .setConstraints(constraints)
             // Defer startup sync to keep first-run navigation and scrolling smooth.
             .setInitialDelay(2, TimeUnit.MINUTES)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .setInputData(
                 workDataOf(TraktSyncWorker.INPUT_SYNC_MODE to TraktSyncWorker.SYNC_MODE_INCREMENTAL)
             )
@@ -259,6 +270,7 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             TraktSyncWorker.SYNC_INTERVAL_HOURS, TimeUnit.HOURS
         )
             .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
             .addTag(TraktSyncWorker.TAG)
             .build()
 
@@ -278,6 +290,18 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
     companion object {
         lateinit var instance: StreameApplication
             private set
+
+        /** Recursively checks if a throwable chain contains a fatal error type. */
+        private tailrec fun isFatalError(throwable: Throwable, depth: Int = 0): Boolean {
+            if (depth > 5) return false // guard against infinite cause loops
+            return when (throwable) {
+                is OutOfMemoryError, is StackOverflowError, is ThreadDeath, is VirtualMachineError -> true
+                else -> {
+                    val cause = throwable.cause
+                    cause != null && cause !== throwable && isFatalError(cause, depth + 1)
+                }
+            }
+        }
     }
 }
 

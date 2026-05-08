@@ -13,7 +13,6 @@ import com.streame.tv.data.model.Review
 import com.streame.tv.data.model.StreamSource
 import com.streame.tv.data.model.Subtitle
 import com.streame.tv.data.api.TmdbApi
-import com.streame.tv.data.repository.CloudSyncRepository
 import com.streame.tv.data.repository.LauncherContinueWatchingRepository
 import com.streame.tv.data.repository.MediaRepository
 import com.streame.tv.data.repository.ProfileManager
@@ -163,7 +162,6 @@ class DetailsViewModel @Inject constructor(
     private val tmdbApi: TmdbApi,
     private val watchHistoryRepository: WatchHistoryRepository,
     private val watchlistRepository: WatchlistRepository,
-    private val cloudSyncRepository: CloudSyncRepository,
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository
 ) : ViewModel() {
 
@@ -854,7 +852,6 @@ class DetailsViewModel @Inject constructor(
                     )
                     runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                 }
-                runCatching { cloudSyncRepository.pushToCloud() }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     toastMessage = "Failed to update watched status",
@@ -883,7 +880,6 @@ class DetailsViewModel @Inject constructor(
                     }
                     watchlistRepository.removeFromWatchlist(currentMediaType, currentMediaId)
                 }
-                runCatching { cloudSyncRepository.pushToCloud() }
 
                 _uiState.value = _uiState.value.copy(
                     isInWatchlist = newInWatchlist,
@@ -1027,10 +1023,10 @@ class DetailsViewModel @Inject constructor(
      */
     private suspend fun deriveNextUnwatchedPlayTarget(tmdbId: Int, watchedKeys: Set<String>): PlayTarget? {
         return try {
-            val tvDetails = tmdbApi.getTvDetails(tmdbId, Constants.TMDB_API_KEY)
+            val tvDetails = tmdbApi.getTvDetails(tmdbId)
             for (seasonNum in 1..tvDetails.numberOfSeasons) {
                 val seasonDetails = runCatching {
-                    tmdbApi.getTvSeason(tmdbId, seasonNum, Constants.TMDB_API_KEY)
+                    tmdbApi.getTvSeason(tmdbId, seasonNum)
                 }.getOrNull() ?: continue
                 val firstUnwatched = seasonDetails.episodes.firstOrNull { episode ->
                     val key = "show_tmdb:$tmdbId:$seasonNum:${episode.episodeNumber}"
@@ -1215,8 +1211,7 @@ class DetailsViewModel @Inject constructor(
                 }
 
                 val result = if (currentMediaType == MediaType.MOVIE) {
-                    val enabledAddons = streamRepository.installedAddons.first()
-                        .filter { it.isEnabled && it.type != com.streame.tv.data.model.AddonType.SUBTITLE }
+                    val enabledAddons = streamRepository.getReliableStreamingAddons()
                     val enabledStreamingAddons = enabledAddons.size
                     val stremioCount = enabledAddons.count { it.runtimeKind == com.streame.tv.data.model.RuntimeKind.STREMIO }
                     val cloudstreamCount = enabledAddons.count { it.runtimeKind == com.streame.tv.data.model.RuntimeKind.CLOUDSTREAM }
@@ -1260,8 +1255,7 @@ class DetailsViewModel @Inject constructor(
                             isLoadingStreams = false,
                             streams = emptyList(),
                             subtitles = emptyList(),
-                            hasStreamingAddons = streamRepository.installedAddons.first()
-                                .count { it.isEnabled && it.type != com.streame.tv.data.model.AddonType.SUBTITLE } > 0
+                            hasStreamingAddons = enabledAddons.isNotEmpty()
                         )
                         return@launch
                     }
@@ -1271,9 +1265,8 @@ class DetailsViewModel @Inject constructor(
                         year = item?.year?.toIntOrNull()
                     ).collect { progressive ->
                         if (!isCurrentRequest()) return@collect
-                        val existingVod = _uiState.value.streams.filter { it.addonId == "Playlists_xtream_vod" }
                         val mergedStreams = sortPlayableStreamsFirst(
-                            (progressive.streams + existingVod)
+                            progressive.streams
                                 .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }
                         )
                         Log.d(
@@ -1281,13 +1274,11 @@ class DetailsViewModel @Inject constructor(
                             "[MovieSources] progressive requestId=$requestId final=${progressive.isFinal} " +
                                 "incoming=${progressive.streams.size} merged=${mergedStreams.size} subtitles=${progressive.subtitles.size}"
                         )
-                        val addonCount = streamRepository.installedAddons.first()
-                            .count { it.isEnabled && it.type != com.streame.tv.data.model.AddonType.SUBTITLE }
                         _uiState.value = _uiState.value.copy(
                             isLoadingStreams = !progressive.isFinal && mergedStreams.isEmpty(),
                             streams = mergedStreams,
                             subtitles = progressive.subtitles,
-                            hasStreamingAddons = addonCount > 0
+                            hasStreamingAddons = enabledAddons.isNotEmpty()
                         )
                         prewarmVisibleStreams(mergedStreams)
                         if (progressive.isFinal) {
@@ -1304,8 +1295,7 @@ class DetailsViewModel @Inject constructor(
                             isLoadingStreams = false,
                             streams = emptyList(),
                             subtitles = emptyList(),
-                            hasStreamingAddons = streamRepository.installedAddons.first()
-                                .count { it.isEnabled && it.type != com.streame.tv.data.model.AddonType.SUBTITLE } > 0
+                            hasStreamingAddons = streamRepository.getReliableStreamingAddons().isNotEmpty()
                         )
                         return@launch
                     }
@@ -1326,18 +1316,16 @@ class DetailsViewModel @Inject constructor(
                         airDate = episodeAirDate
                     ).collect { progressive ->
                         if (!isCurrentRequest()) return@collect
-                        val existingVod = _uiState.value.streams.filter { it.addonId == "Playlists_xtream_vod" }
                         val mergedStreams = sortPlayableStreamsFirst(
-                            (progressive.streams + existingVod)
+                            progressive.streams
                                 .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }
                         )
-                        val addonCount = streamRepository.installedAddons.first()
-                            .count { it.isEnabled && it.type != com.streame.tv.data.model.AddonType.SUBTITLE }
+                        val episodeAddons = streamRepository.getReliableStreamingAddons()
                         _uiState.value = _uiState.value.copy(
                             isLoadingStreams = !progressive.isFinal && mergedStreams.isEmpty(),
                             streams = mergedStreams,
                             subtitles = progressive.subtitles,
-                            hasStreamingAddons = addonCount > 0
+                            hasStreamingAddons = episodeAddons.isNotEmpty()
                         )
                         prewarmVisibleStreams(mergedStreams)
                     }
@@ -1362,7 +1350,7 @@ class DetailsViewModel @Inject constructor(
             try {
                 if (watched) {
                     traktRepository.markEpisodeWatched(currentMediaId, season, episode)
-                    // Also remove from Supabase watch_history (removes from Continue Watching)
+                    // Also remove from watch history (removes from Continue Watching)
                     watchHistoryRepository.removeFromHistory(currentMediaId, season, episode)
 
                     // Save the NEXT episode to CW (local + cloud) so it appears on all devices
@@ -1413,7 +1401,6 @@ class DetailsViewModel @Inject constructor(
                 runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                 // Push cloud snapshot so other devices see the episode watched-status
                 // change and the updated Continue Watching entry.
-                runCatching { cloudSyncRepository.pushToCloud() }
             } catch (e: Exception) {
                 // Failed silently
             }
@@ -1515,7 +1502,6 @@ class DetailsViewModel @Inject constructor(
                 runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                 // Push cloud snapshot so other devices see the entire season marked watched
                 // and the updated Continue Watching entry pointing to the next unwatched episode.
-                runCatching { cloudSyncRepository.pushToCloud() }
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(
                     toastMessage = "Failed to mark season as watched",
@@ -1551,7 +1537,7 @@ class DetailsViewModel @Inject constructor(
                 runCatching { traktRepository.getWatchedEpisodesForShow(tmdbId) }.getOrDefault(emptySet())
             }
 
-            val tvDetails = tmdbApi.getTvDetails(tmdbId, Constants.TMDB_API_KEY)
+            val tvDetails = tmdbApi.getTvDetails(tmdbId)
             val numSeasons = tvDetails.numberOfSeasons
 
             val progressMap = mutableMapOf<Int, Pair<Int, Int>>()
@@ -1559,7 +1545,7 @@ class DetailsViewModel @Inject constructor(
 
             for (seasonNum in 1..numSeasons) {
                 try {
-                    val seasonDetails = tmdbApi.getTvSeason(tmdbId, seasonNum, Constants.TMDB_API_KEY)
+                    val seasonDetails = tmdbApi.getTvSeason(tmdbId, seasonNum)
                     val totalEpisodes = seasonDetails.episodes.size
 
                     val watchedCount = if (cachedCountsBySeason.isNotEmpty()) {
@@ -1786,17 +1772,17 @@ class DetailsViewModel @Inject constructor(
     ): Long {
         return try {
             if (mediaType == MediaType.MOVIE) {
-                val details = tmdbApi.getMovieDetails(tmdbId, Constants.TMDB_API_KEY)
+                val details = tmdbApi.getMovieDetails(tmdbId)
                 (details.runtime ?: 0) * 60L
             } else {
-                val details = tmdbApi.getTvDetails(tmdbId, Constants.TMDB_API_KEY)
+                val details = tmdbApi.getTvDetails(tmdbId)
                 val avgRuntime = details.episodeRunTime.firstOrNull() ?: 0
                 if (avgRuntime > 0) {
                     avgRuntime * 60L
                 } else {
                     val s = season ?: return 0L
                     val e = episode ?: return 0L
-                    val seasonDetails = tmdbApi.getTvSeason(tmdbId, s, Constants.TMDB_API_KEY)
+                    val seasonDetails = tmdbApi.getTvSeason(tmdbId, s)
                     val episodeRuntime = seasonDetails.episodes.firstOrNull { it.episodeNumber == e }?.runtime
                         ?: seasonDetails.episodes.firstOrNull { it.runtime != null }?.runtime
                         ?: 0
@@ -1864,8 +1850,8 @@ class DetailsViewModel @Inject constructor(
     private suspend fun resolveExternalIds(mediaType: MediaType, mediaId: Int): ExternalIds {
         return try {
             val ids = when (mediaType) {
-                MediaType.MOVIE -> tmdbApi.getMovieExternalIds(mediaId, Constants.TMDB_API_KEY)
-                MediaType.TV -> tmdbApi.getTvExternalIds(mediaId, Constants.TMDB_API_KEY)
+                MediaType.MOVIE -> tmdbApi.getMovieExternalIds(mediaId)
+                MediaType.TV -> tmdbApi.getTvExternalIds(mediaId)
             }
             ExternalIds(imdbId = ids.imdbId, tvdbId = ids.tvdbId)
         } catch (_: Exception) {

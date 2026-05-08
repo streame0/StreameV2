@@ -506,12 +506,6 @@ fun HomeScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshContinueWatchingOnly(force = true)
-                // Pull the full cloud state (addons, catalogs, settings) on resume.
-                // This catches any changes pushed by another device while this one
-                // was backgrounded — the WebSocket may have been killed by Android,
-                // so we can't rely on realtime alone. Throttled internally to avoid
-                // redundant pulls on rapid activity transitions.
-                viewModel.pullCloudStateOnResume()
                 suppressSelectUntilMs = SystemClock.elapsedRealtime() + 150L
             }
         }
@@ -948,7 +942,6 @@ fun HomeScreen(
             currentProfile = currentProfile,
             profileCount = profileCount,
             clockFormat = uiState.clockFormat,
-            syncStatus = uiState.syncStatus,
             onItemFocusedPrefetch = {},
             onNavigateToDetails = onNavigateToDetails,
             onNavigateToCollection = onNavigateToCollection,
@@ -1200,40 +1193,7 @@ private fun HeroSection(
         // Performance: Use key instead of AnimatedContent for faster transitions
         key(item.id) {
             val currentItem = item
-            val isPlaylistsHero = currentItem.status?.startsWith("Playlists:") == true
             Column {
-                if (isPlaylistsHero) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .background(AccentRed, RoundedCornerShape(4.dp))
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.live).uppercase(),
-                                style = StreameTypography.caption.copy(
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Black
-                                ),
-                                color = Color.White
-                            )
-                        }
-                        if (currentItem.subtitle.isNotBlank()) {
-                            Text(
-                                text = currentItem.subtitle,
-                                style = StreameTypography.caption.copy(
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    shadow = textShadow
-                                ),
-                                color = Color.White
-                            )
-                        }
-                    }
-                } else {
                 // Get actual genre names from genre IDs (memoized to avoid list allocations per recomposition)
                 val genreText = remember(currentItem.id, currentItem.genreIds) {
                     val genreMap = if (currentItem.mediaType == MediaType.TV) tvGenres else movieGenres
@@ -1384,7 +1344,6 @@ private fun HeroSection(
                             color = Color.White
                         )
                     }
-                }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -2057,7 +2016,6 @@ private fun HomeInputLayer(
     currentProfile: com.streame.tv.data.model.Profile?,
     profileCount: Int = 1,
     clockFormat: String = "24h",
-    syncStatus: com.streame.tv.data.repository.CloudSyncStatus = com.streame.tv.data.repository.CloudSyncStatus.NOT_SIGNED_IN,
     onItemFocusedPrefetch: (MediaItem) -> Unit = {},
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit,
     onNavigateToCollection: (String) -> Unit,
@@ -2515,6 +2473,25 @@ private fun MobileHomeRowsLayer(
                     )
                 }
 
+                // Show skeleton cards when row is still loading (empty items)
+                if (category.items.isEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = contentStartPadding, end = contentStartPadding),
+                        horizontalArrangement = Arrangement.spacedBy(mobileItemSpacing)
+                    ) {
+                        repeat(6) {
+                            val skeletonAspect = if (rowUsePosterCards) 2f / 3f else 16f / 9f
+                            Box(
+                                modifier = Modifier
+                                    .size(rowMobileItemWidth, rowMobileItemWidth / skeletonAspect)
+                                    .clip(rememberStreameCardShape(StreameSkin.radius.md))
+                                    .background(Color.White.copy(alpha = 0.08f))
+                            )
+                        }
+                    }
+                } else
                 // Horizontal card row with touch scrolling
                 LazyRow(
                     modifier = Modifier.StreameDpadFocusGroup(),
@@ -3197,6 +3174,26 @@ private fun ContentRow(
                 style = StreameTypography.sectionTitle.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold),
                 color = Color.White
             )
+        }
+
+        // Show skeleton cards when row is still loading (empty items)
+        if (category.items.isEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = startPadding, end = startPadding),
+                horizontalArrangement = Arrangement.spacedBy(itemSpacing)
+            ) {
+                repeat(6) {
+                    Box(
+                        modifier = Modifier
+                            .size(itemWidth, itemWidth / cardAspectRatio)
+                            .clip(rememberStreameCardShape(StreameSkin.radius.md))
+                            .background(Color.White.copy(alpha = 0.08f))
+                    )
+                }
+            }
+            return
         }
 
         // Cards row - clipped to hide previous items when scrolling

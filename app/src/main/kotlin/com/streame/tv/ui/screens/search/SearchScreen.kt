@@ -359,11 +359,51 @@ fun SearchScreen(
                     ContentGrid(items = uiState.aiResults, usePosterCards = aiUsePosterCards, isLoading = false, isTouchDevice = isTouchDevice, onItemClick = { onNavigateToDetails(it.mediaType, it.id) }, onLoadMore = {})
                 }
 
+                uiState.error != null && uiState.query.isNotEmpty() && !hasSearchResults -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(uiState.errorMessage ?: stringResource(R.string.error_loading), style = StreameTypography.body, color = TextSecondary)
+                            if (uiState.isRetryable && uiState.retryAction != null) {
+                                Spacer(Modifier.height(12.dp))
+                                if (isTouchDevice) {
+                                    androidx.compose.material3.Button(onClick = { uiState.retryAction?.invoke() }) {
+                                        Text(stringResource(R.string.retry))
+                                    }
+                                } else {
+                                    androidx.tv.material3.Button(onClick = { uiState.retryAction?.invoke() }) {
+                                        Text(stringResource(R.string.retry))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 uiState.query.isNotEmpty() && !uiState.isAiSearch && !hasSearchResults -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("${stringResource(R.string.no_results_for)} \"${uiState.query}\"", style = StreameTypography.body, color = TextSecondary) }
                 }
 
                 uiState.isDiscoverLoading && activeCategories.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator(color = Pink, size = 48.dp) }
+
+                uiState.error != null && uiState.query.isEmpty() && activeCategories.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(uiState.errorMessage ?: stringResource(R.string.error_loading), style = StreameTypography.body, color = TextSecondary)
+                            if (uiState.isRetryable && uiState.retryAction != null) {
+                                Spacer(Modifier.height(12.dp))
+                                if (isTouchDevice) {
+                                    androidx.compose.material3.Button(onClick = { uiState.retryAction?.invoke() }) {
+                                        Text(stringResource(R.string.retry))
+                                    }
+                                } else {
+                                    androidx.tv.material3.Button(onClick = { uiState.retryAction?.invoke() }) {
+                                        Text(stringResource(R.string.retry))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 activeCategories.isNotEmpty() -> {
                     // Row-based content (discover rows or search results) - HomeScreen pattern

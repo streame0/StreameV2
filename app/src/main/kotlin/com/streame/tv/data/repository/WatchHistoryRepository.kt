@@ -1,10 +1,7 @@
 package com.streame.tv.data.repository
 
-import com.streame.tv.data.api.SupabaseApi
 import com.streame.tv.data.model.MediaType
 import com.streame.tv.util.Constants
-import kotlinx.serialization.Serializable
-import retrofit2.HttpException
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -12,9 +9,8 @@ import javax.inject.Provider
 import javax.inject.Singleton
 
 /**
- * Watch history entry for Supabase
+ * Watch history entry (local only — no Supabase)
  */
-@Serializable
 data class WatchHistoryEntry(
     val id: String? = null,
     val user_id: String,
@@ -35,26 +31,18 @@ data class WatchHistoryEntry(
     val updated_at: String? = null,
     val source: String? = null,
     val backdrop_path: String? = null,
-    val poster_path: String? = null,
-    val stream_key: String? = null,
-    val stream_addon_id: String? = null,
-    val stream_title: String? = null
+    val poster_path: String? = null
 )
 
 /**
- * Repository for syncing watch history with Supabase
+ * Repository for watch history — local in-memory cache only.
+ * Trakt playback API provides continue-watching data.
  */
 @Singleton
 class WatchHistoryRepository @Inject constructor(
     private val authRepositoryProvider: Provider<AuthRepository>,
-    private val supabaseApi: SupabaseApi,
-    private val profileManager: ProfileManager,
-    private val realtimeSyncManagerProvider: Provider<RealtimeSyncManager>
+    private val profileManager: ProfileManager
 ) {
-    // In-memory cache of the last successful CW fetch. When the Supabase REST call
-    // fails (network timeout, 401, etc.), we return this cached list instead of an
-    // empty list — so Continue Watching never silently disappears from the UI.
-    // Updated on every successful getContinueWatching() call.
     @Volatile
     private var cachedContinueWatching: List<WatchHistoryEntry> = emptyList()
     private val cachedContinueWatchingByProfile = ConcurrentHashMap<String, List<WatchHistoryEntry>>()
@@ -62,54 +50,25 @@ class WatchHistoryRepository @Inject constructor(
 
     private fun currentProfileId(): String = profileManager.getProfileIdSync().ifBlank { "default" }
 
-    private fun currentProfileQuery(): String? {
-        val profileId = currentProfileId()
-        return if (profileManager.isDefaultProfile()) null else "eq.$profileId"
-    }
-
     private fun profileHistorySource(base: String): String {
-        // Use stable profile ID so rename/case changes do not split history.
-        // Profile IDs are synced via cloud profile sync.
         val profileId = currentProfileId()
         return "profile:$profileId:$base"
     }
 
-    private fun profileHistorySourceFilter(): String {
-        // PostgREST wildcard for LIKE is '*'
-        val profileId = currentProfileId()
-        return "like.profile:$profileId:*"
-    }
-
-    /**
-     * In-memory filter that accepts entries for the current profile only.
-     * Matches by profile NAME (cross-device) and profile UUID (same device).
-     * Legacy entries (source = "Streame" / "trakt" / null) are only accepted
-     * for the default profile to avoid cross-profile leakage.
-     */
     private fun filterByProfile(entries: List<WatchHistoryEntry>): List<WatchHistoryEntry> {
         val profileId = currentProfileId()
-        val profileName = profileManager.getProfileNameSync()
-        val prefixById = "profile:$profileId:"
-        val prefixByName = "profile:$profileName:"
         val isDefault = profileManager.isDefaultProfile()
-
         return entries.filter { entry ->
             if (!entry.profile_id.isNullOrBlank()) {
-                return@filter entry.profile_id == profileId
-            }
-            val src = entry.source
-            when {
-                // Profile-specific entries: match by UUID or name
-                src != null && src.startsWith("profile:") ->
-                    src.startsWith(prefixById) || src.startsWith(prefixByName)
-                // Legacy entries (null / "Streame" / "trakt"): only show on default profile
-                else -> isDefault
+                entry.profile_id == profileId
+            } else {
+                isDefault
             }
         }
     }
 
     /**
-     * Save watch progress to Supabase
+     * Save watch progress to local cache
      */
     suspend fun saveProgress(
         mediaType: MediaType,
@@ -122,152 +81,69 @@ class WatchHistoryRepository @Inject constructor(
         episodeTitle: String?,
         progress: Float,
         duration: Long,
-        position: Long,
-        streamKey: String? = null,
-        streamAddonId: String? = null,
-        streamTitle: String? = null
+        position: Long
     ) {
         val userId = authRepositoryProvider.get().getCurrentUserId() ?: return
 
         val entry = WatchHistoryEntry(
-                user_id = userId,
-                profile_id = currentProfileId(),
-                media_type = if (mediaType == MediaType.MOVIE) "movie" else "tv",
-                show_tmdb_id = tmdbId,
-                title = title,
-                poster_path = poster,
-                backdrop_path = backdrop,
-                season = season,
-                episode = episode,
-                episode_title = episodeTitle,
-                progress = progress,
-                duration_seconds = duration,
-                position_seconds = position,
-                source = profileHistorySource("Streame"),
-                stream_key = streamKey,
-                stream_addon_id = streamAddonId,
-                stream_title = streamTitle
-            )
+            user_id = userId,
+            profile_id = currentProfileId(),
+            media_type = if (mediaType == MediaType.MOVIE) "movie" else "tv",
+            show_tmdb_id = tmdbId,
+            title = title,
+            poster_path = poster,
+            backdrop_path = backdrop,
+            season = season,
+            episode = episode,
+            episode_title = episodeTitle,
+            progress = progress,
+            duration_seconds = duration,
+            position_seconds = position,
+            source = profileHistorySource("Streame")
+        )
 
-        // Upsert - update if exists, insert if not.
-        // Retry without stream_* fields if the Supabase schema hasn't been migrated yet.
-        var saved = false
-        try {
-            executeSupabaseCall("save watch progress") { auth ->
-                supabaseApi.upsertWatchHistory(auth = auth, item = entry.toRecord())
+        val profileId = currentProfileId()
+        val nowIso = Instant.now().toString()
+        val cachedEntry = entry.copy(
+            paused_at = nowIso,
+            updated_at = nowIso
+        )
+        val profileCache = cachedContinueWatchingByProfile[profileId].orEmpty()
+        cachedContinueWatching = if (isEntryInProgress(cachedEntry)) {
+            listOf(cachedEntry) + profileCache.filterNot { existing ->
+                existing.media_type == cachedEntry.media_type &&
+                    existing.show_tmdb_id == cachedEntry.show_tmdb_id
             }
-            saved = true
-        } catch (e: HttpException) {
-            runCatching {
-                val fallback = entry.copy(stream_key = null, stream_addon_id = null, stream_title = null)
-                executeSupabaseCall("save watch progress fallback") { auth ->
-                    supabaseApi.upsertWatchHistory(auth = auth, item = fallback.toRecord())
-                }
-                saved = true
+        } else {
+            profileCache.filterNot { existing ->
+                existing.media_type == cachedEntry.media_type &&
+                    existing.show_tmdb_id == cachedEntry.show_tmdb_id
             }
-        } catch (_: Exception) {
         }
-
-        // Mark the local write timestamp on the realtime manager so the incoming
-        // watch_history realtime event (which fires back to our own device) doesn't
-        // trigger a redundant Home Continue Watching refresh. See issue #91 fix.
-        if (saved) {
-            val profileId = currentProfileId()
-            val nowIso = Instant.now().toString()
-            val cachedEntry = entry.copy(
-                paused_at = nowIso,
-                updated_at = nowIso
-            )
-            val profileCache = cachedContinueWatchingByProfile[profileId].orEmpty()
-            cachedContinueWatching = if (isEntryInProgress(cachedEntry)) {
-                listOf(cachedEntry) + profileCache.filterNot { existing ->
-                    existing.media_type == cachedEntry.media_type &&
-                        existing.show_tmdb_id == cachedEntry.show_tmdb_id
-                }
-            } else {
-                profileCache.filterNot { existing ->
-                    existing.media_type == cachedEntry.media_type &&
-                        existing.show_tmdb_id == cachedEntry.show_tmdb_id
-                }
-            }
-            cachedContinueWatchingByProfile[profileId] = cachedContinueWatching
-            runCatching { realtimeSyncManagerProvider.get().markLocalWatchHistoryWrite() }
-        }
+        cachedContinueWatchingByProfile[profileId] = cachedContinueWatching
     }
 
     @Volatile
     private var cachedWatchHistory: List<WatchHistoryEntry> = emptyList()
 
     /**
-     * Get watch history for current user.
-     * Returns cached data on failure instead of empty list.
+     * Get watch history from local cache
      */
     suspend fun getWatchHistory(): List<WatchHistoryEntry> {
         val profileId = currentProfileId()
-        val userId = authRepositoryProvider.get().getCurrentUserId()
-            ?: return cachedWatchHistoryByProfile[profileId].orEmpty()
-
-        return try {
-            val records = executeSupabaseCall("get watch history") { auth ->
-                supabaseApi.getWatchHistory(
-                    auth = auth,
-                    userId = "eq.$userId",
-                    profileId = currentProfileQuery(),
-                    source = null,
-                    order = "updated_at.desc",
-                    limit = 500
-                )
-            }.map { it.toEntry() }
-            val result = filterByProfile(records)
-            cachedWatchHistory = result
-            cachedWatchHistoryByProfile[profileId] = result
-            result
-        } catch (_: Exception) {
-            cachedWatchHistoryByProfile[profileId].orEmpty()
-        }
+        return cachedWatchHistoryByProfile[profileId].orEmpty()
     }
 
     /**
-     * Get continue watching items (progress < 90%).
-     *
-     * On success: updates the in-memory cache and returns fresh data.
-     * On failure: returns the last successfully fetched data from cache instead
-     * of an empty list — so Continue Watching never silently disappears from the
-     * Home screen due to a transient network error or expired token. The cached
-     * data may be a few seconds stale, but stale data is infinitely better than
-     * an empty row that makes the user think their watch history is lost.
+     * Get continue watching items from local cache
      */
     suspend fun getContinueWatching(): List<WatchHistoryEntry> {
         val profileId = currentProfileId()
-        val userId = authRepositoryProvider.get().getCurrentUserId()
-        if (userId == null) return cachedContinueWatchingByProfile[profileId].orEmpty()
-
-        return try {
-            val records = executeSupabaseCall("get continue watching history") { auth ->
-                supabaseApi.getWatchHistory(
-                    auth = auth,
-                    userId = "eq.$userId",
-                    profileId = currentProfileQuery(),
-                    source = null,
-                    order = "updated_at.desc",
-                    limit = 500
-                )
-            }
-            val allEntries = records.map { it.toEntry() }
-            val result = filterByProfile(allEntries)
-                .filter { isEntryInProgress(it) }
-            // Cache the successful result for offline/error fallback
-            cachedContinueWatching = result
-            cachedContinueWatchingByProfile[profileId] = result
-            result
-        } catch (_: Exception) {
-            // Return cached data instead of empty list on failure
-            cachedContinueWatchingByProfile[profileId].orEmpty()
-        }
+        return cachedContinueWatchingByProfile[profileId].orEmpty()
     }
 
     /**
-     * Get progress for a specific item
+     * Get progress for a specific item from local cache
      */
     suspend fun getProgress(
         mediaType: MediaType,
@@ -275,105 +151,55 @@ class WatchHistoryRepository @Inject constructor(
         season: Int?,
         episode: Int?
     ): WatchHistoryEntry? {
-        val userId = authRepositoryProvider.get().getCurrentUserId() ?: return null
-
-        return try {
-            val records = executeSupabaseCall("get watch history item") { auth ->
-                supabaseApi.getWatchHistoryItem(
-                    auth = auth,
-                    userId = "eq.$userId",
-                    profileId = currentProfileQuery(),
-                    showTmdbId = "eq.$tmdbId",
-                    mediaType = "eq.${if (mediaType == MediaType.MOVIE) "movie" else "tv"}",
-                    source = null,
-                    season = season?.let { "eq.$it" },
-                    episode = episode?.let { "eq.$it" }
-                )
-            }
-            filterByProfile(records.map { it.toEntry() }).firstOrNull()
-        } catch (_: Exception) {
-            null
-        }
+        val profileId = currentProfileId()
+        val mediaTypeKey = if (mediaType == MediaType.MOVIE) "movie" else "tv"
+        return cachedContinueWatchingByProfile[profileId]
+            .orEmpty()
+            .filter { it.media_type == mediaTypeKey && it.show_tmdb_id == tmdbId }
+            .firstOrNull()
     }
 
     /**
-     * Get the latest in-progress entry for a show/movie.
+     * Get the latest in-progress entry for a show/movie from local cache
      */
     suspend fun getLatestProgress(
         mediaType: MediaType,
         tmdbId: Int
     ): WatchHistoryEntry? {
-        val userId = authRepositoryProvider.get().getCurrentUserId() ?: return null
+        val profileId = currentProfileId()
         val mediaTypeKey = if (mediaType == MediaType.MOVIE) "movie" else "tv"
-
-        return try {
-            val records = executeSupabaseCall("get watch history by show") { auth ->
-                supabaseApi.getWatchHistoryItem(
-                    auth = auth,
-                    userId = "eq.$userId",
-                    profileId = currentProfileQuery(),
-                    showTmdbId = "eq.$tmdbId",
-                    mediaType = "eq.$mediaTypeKey",
-                    source = null,
-                    order = "updated_at.desc",
-                    limit = 50
-                )
+        return cachedContinueWatchingByProfile[profileId]
+            .orEmpty()
+            .filter { it.media_type == mediaTypeKey && it.show_tmdb_id == tmdbId && isEntryInProgress(it) }
+            .maxByOrNull { entry ->
+                parseEpoch(entry.updated_at).coerceAtLeast(parseEpoch(entry.paused_at))
             }
-            filterByProfile(records.map { it.toEntry() })
-                .filter { isEntryInProgress(it) }
-                .maxByOrNull { entry ->
-                    parseEpoch(entry.updated_at).coerceAtLeast(parseEpoch(entry.paused_at))
-                }
-        } catch (_: Exception) {
-            null
-        }
     }
 
     /**
-     * Remove item from watch history
+     * Remove item from watch history (local cache only)
      */
     suspend fun removeFromHistory(
         tmdbId: Int,
         season: Int?,
         episode: Int?
     ) {
-        val userId = authRepositoryProvider.get().getCurrentUserId() ?: return
-
-        try {
-            executeSupabaseCall("remove watch history item") { auth ->
-                supabaseApi.deleteWatchHistory(
-                    auth = auth,
-                    userId = "eq.$userId",
-                    showTmdbId = "eq.$tmdbId",
-                    profileId = currentProfileQuery(),
-                    source = profileHistorySourceFilter(),
-                    season = season?.let { "eq.$it" },
-                    episode = episode?.let { "eq.$it" }
-                )
-            }
-        } catch (_: Exception) {
-            // Silently handle errors
-        }
+        val profileId = currentProfileId()
+        cachedContinueWatchingByProfile[profileId] = cachedContinueWatchingByProfile[profileId]
+            .orEmpty()
+            .filterNot { it.show_tmdb_id == tmdbId }
+        cachedWatchHistoryByProfile[profileId] = cachedWatchHistoryByProfile[profileId]
+            .orEmpty()
+            .filterNot { it.show_tmdb_id == tmdbId }
     }
 
     /**
-     * Clear all watch history
+     * Clear all watch history (local cache only)
      */
     suspend fun clearHistory() {
-        val userId = authRepositoryProvider.get().getCurrentUserId() ?: return
-
-        try {
-            executeSupabaseCall("clear watch history") { auth ->
-                supabaseApi.deleteWatchHistory(
-                    auth = auth,
-                    userId = "eq.$userId",
-                    profileId = currentProfileQuery(),
-                    source = profileHistorySourceFilter()
-                )
-            }
-        } catch (_: Exception) {
-            // Silently handle errors
-        }
+        val profileId = currentProfileId()
+        cachedContinueWatchingByProfile[profileId] = emptyList()
+        cachedWatchHistoryByProfile[profileId] = emptyList()
     }
 
     fun clearProfileCaches() {
@@ -381,33 +207,6 @@ class WatchHistoryRepository @Inject constructor(
         cachedWatchHistory = emptyList()
         cachedContinueWatchingByProfile.clear()
         cachedWatchHistoryByProfile.clear()
-    }
-
-    private suspend fun <T> executeSupabaseCall(
-        operation: String,
-        block: suspend (String) -> T
-    ): T {
-        val auth = getSupabaseAuth() ?: throw IllegalStateException("Supabase auth failed")
-        return try {
-            block(auth)
-        } catch (e: HttpException) {
-            if (e.code() == 401) {
-                // Unauthorized, refresh session and retry
-                val refreshed = authRepositoryProvider.get().refreshAccessToken()
-                if (!refreshed.isNullOrBlank()) {
-                    return block("Bearer $refreshed")
-                }
-            }
-            throw e
-        }
-    }
-
-    private suspend fun getSupabaseAuth(): String? {
-        val authRepository = authRepositoryProvider.get()
-        val token = authRepository.getAccessToken()
-        if (!token.isNullOrBlank()) return "Bearer $token"
-        val refreshed = authRepository.refreshAccessToken()
-        return refreshed?.let { "Bearer $it" }
     }
 
     private fun parseEpoch(value: String?): Long {
@@ -440,59 +239,4 @@ class WatchHistoryRepository @Inject constructor(
     private fun normalizeStoredSeconds(value: Long): Long {
         return if (value > 86_400L) value / 1000L else value
     }
-}
-
-private fun WatchHistoryEntry.toRecord(): com.streame.tv.data.api.WatchHistoryRecord {
-    return com.streame.tv.data.api.WatchHistoryRecord(
-        userId = user_id,
-        profileId = profile_id,
-        mediaType = media_type,
-        showTmdbId = show_tmdb_id,
-        showTraktId = show_trakt_id,
-        season = season,
-        episode = episode,
-        traktEpisodeId = trakt_episode_id,
-        tmdbEpisodeId = tmdb_episode_id,
-        progress = progress,
-        positionSeconds = position_seconds,
-        durationSeconds = duration_seconds,
-        pausedAt = paused_at,
-        updatedAt = updated_at,
-        source = source,
-        title = title,
-        episodeTitle = episode_title,
-        backdropPath = backdrop_path,
-        posterPath = poster_path,
-        streamKey = stream_key,
-        streamAddonId = stream_addon_id,
-        streamTitle = stream_title
-    )
-}
-
-private fun com.streame.tv.data.api.WatchHistoryRecord.toEntry(): WatchHistoryEntry {
-    return WatchHistoryEntry(
-        id = id,
-        user_id = userId,
-        profile_id = profileId,
-        media_type = mediaType,
-        show_tmdb_id = showTmdbId ?: 0,
-        show_trakt_id = showTraktId,
-        season = season,
-        episode = episode,
-        trakt_episode_id = traktEpisodeId,
-        tmdb_episode_id = tmdbEpisodeId,
-        title = title,
-        episode_title = episodeTitle,
-        progress = progress,
-        duration_seconds = durationSeconds,
-        position_seconds = positionSeconds,
-        paused_at = pausedAt,
-        updated_at = updatedAt,
-        source = source,
-        backdrop_path = backdropPath,
-        poster_path = posterPath,
-        stream_key = streamKey,
-        stream_addon_id = streamAddonId,
-        stream_title = streamTitle
-    )
 }

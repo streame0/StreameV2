@@ -86,7 +86,19 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.work.ExistingWorkPolicy
+import androidx.work.BackoffPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
@@ -153,6 +165,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var launcherContinueWatchingRepository: Lazy<LauncherContinueWatchingRepository>
+
+    @Inject
+    lateinit var networkMonitor: Lazy<com.streame.tv.network.NetworkMonitor>
 
     @Inject
     lateinit var mediaRepository: Lazy<MediaRepository>
@@ -303,6 +318,7 @@ class MainActivity : ComponentActivity() {
                         watchHistoryRepository = watchHistoryRepository.get(),
                         watchlistRepository = watchlistRepository.get(),
                         launcherContinueWatchingRepository = launcherContinueWatchingRepository.get(),
+                        networkMonitor = networkMonitor.get(),
                         skipProfileSelection = skipProfileSelection,
                         pendingLauncherRequest = pendingLauncherRequest,
                         onConsumeLauncherRequest = { pendingLauncherRequest = null },
@@ -467,6 +483,7 @@ fun StreameApp(
     watchHistoryRepository: WatchHistoryRepository,
     watchlistRepository: WatchlistRepository,
     launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
+    networkMonitor: com.streame.tv.network.NetworkMonitor,
     skipProfileSelection: Boolean? = null,
     pendingLauncherRequest: LauncherContinueWatchingRequest? = null,
     onConsumeLauncherRequest: () -> Unit = {},
@@ -533,6 +550,16 @@ fun StreameApp(
         !currentRoute.contains("profile") &&
         !currentRoute.contains("login")
 
+    val isOnline by networkMonitor.connectionState.collectAsStateWithLifecycle(initialValue = true)
+    var wasOffline by remember { mutableStateOf(false) }
+    LaunchedEffect(isOnline) {
+        if (!isOnline) wasOffline = true
+    }
+    val showBackOnline = isOnline && wasOffline
+    LaunchedEffect(showBackOnline) {
+        if (showBackOnline) { delay(3000); wasOffline = false }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -552,6 +579,10 @@ fun StreameApp(
             // becomes 0 when the player hides the bars.
             .then(if (isMobile) Modifier.systemBarsPadding() else Modifier)
     ) {
+        // Offline / back-online banner
+        if (!isOnline || showBackOnline) {
+            OfflineBanner(isOffline = !isOnline)
+        }
         Box(modifier = Modifier.weight(1f)) {
             AppNavigation(
                 navController = navController,
@@ -561,7 +592,6 @@ fun StreameApp(
                 preloadedHeroLogoUrl = preloadedHeroLogoUrl,
                 preloadedLogoCache = preloadedLogoCache,
                 currentProfile = activeProfile,
-                isCloudConnected = authState is AuthState.Authenticated,
                 onSwitchProfile = {
                     appCoroutineScope.launch {
                         traktRepository.clearAllProfileCaches()
@@ -610,6 +640,7 @@ fun StreameApp(
 private fun enqueueFullTraktSync(context: android.content.Context) {
     val request = OneTimeWorkRequestBuilder<TraktSyncWorker>()
         .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, java.util.concurrent.TimeUnit.SECONDS)
         .setInputData(
             workDataOf(TraktSyncWorker.INPUT_SYNC_MODE to TraktSyncWorker.SYNC_MODE_FULL)
         )
@@ -621,4 +652,25 @@ private fun enqueueFullTraktSync(context: android.content.Context) {
         ExistingWorkPolicy.REPLACE,
         request
     )
+}
+
+@Composable
+private fun OfflineBanner(isOffline: Boolean) {
+    val backgroundColor = if (isOffline) Color(0xFFB71C1C) else Color(0xFF2E7D32)
+    val icon = if (isOffline) Icons.Default.CloudOff else Icons.Default.CloudDone
+    val text = if (isOffline) "No internet connection" else "Back online"
+
+    Surface(
+        color = backgroundColor,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(text, color = Color.White, style = MaterialTheme.typography.labelSmall)
+        }
+    }
 }

@@ -18,7 +18,9 @@
 
     <application
         android:name=".StreameApplication"
-        android:allowBackup="false"
+        android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/backup_rules_device_specific"
         android:banner="@drawable/app_banner"
         android:extractNativeLibs="false"
         android:hardwareAccelerated="true"
@@ -30,7 +32,7 @@
         android:supportsRtl="true"
         android:localeConfig="@xml/locale_config"
         android:theme="@style/Theme.StreameTV"
-        android:usesCleartextTraffic="true">
+        >
 
         <meta-data
             android:name="io.sentry.auto-init"

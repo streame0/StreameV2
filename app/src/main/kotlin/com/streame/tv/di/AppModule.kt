@@ -2,19 +2,24 @@ package com.streame.tv.di
 
 import android.content.Context
 import com.streame.tv.data.api.AniSkipApi
+import com.streame.tv.data.local.AppDatabase
+import com.streame.tv.data.local.HomeRowDao
+import com.streame.tv.data.local.LocalHomeRepository
 import com.streame.tv.data.api.ArmApi
 import com.streame.tv.data.api.IntroDbApi
 import com.streame.tv.data.api.StreamApi
-import com.streame.tv.data.api.SupabaseApi
 import com.streame.tv.data.api.TmdbApi
 import com.streame.tv.data.api.TraktApi
 import com.streame.tv.network.OkHttpProvider
 import com.streame.tv.util.Constants
+import com.streame.tv.di.DispatcherProvider
+import com.streame.tv.di.AppDispatcherProvider
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -33,7 +38,43 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideTmdbApi(okHttpClient: OkHttpClient): TmdbApi {
+    fun provideDispatcherProvider(): DispatcherProvider {
+        return AppDispatcherProvider()
+    }
+
+    @Provides
+    @Singleton
+    @Named("tmdb")
+    fun provideTmdbOkHttpClient(): OkHttpClient {
+        return OkHttpProvider.client.newBuilder()
+            .addInterceptor(Interceptor { chain ->
+                val url = chain.request().url.newBuilder()
+                    .addQueryParameter("api_key", Constants.TMDB_API_KEY)
+                    .build()
+                chain.proceed(chain.request().newBuilder().url(url).build())
+            })
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    @Named("trakt")
+    fun provideTraktOkHttpClient(): OkHttpClient {
+        return OkHttpProvider.client.newBuilder()
+            .addInterceptor(Interceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("trakt-api-key", Constants.TRAKT_CLIENT_ID)
+                    .header("trakt-api-version", "2")
+                    .header("Content-Type", "application/json")
+                    .build()
+                chain.proceed(request)
+            })
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideTmdbApi(@Named("tmdb") okHttpClient: OkHttpClient): TmdbApi {
         return Retrofit.Builder()
             .baseUrl(Constants.TMDB_BASE_URL)
             .client(okHttpClient)
@@ -44,29 +85,13 @@ object AppModule {
     
     @Provides
     @Singleton
-    fun provideTraktApi(okHttpClient: OkHttpClient): TraktApi {
+    fun provideTraktApi(@Named("trakt") okHttpClient: OkHttpClient): TraktApi {
         return Retrofit.Builder()
             .baseUrl(Constants.TRAKT_API_URL)
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(TraktApi::class.java)
-    }
-    
-    @Provides
-    @Singleton
-    fun provideSupabaseApi(okHttpClient: OkHttpClient): SupabaseApi {
-        // Supabase API client without disk cache to prevent OkHttp from returning
-        // cached responses for POST/upsert operations (which silently drops writes)
-        val noCacheClient = okHttpClient.newBuilder()
-            .cache(null)
-            .build()
-        return Retrofit.Builder()
-            .baseUrl(Constants.SUPABASE_URL + "/")
-            .client(noCacheClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(SupabaseApi::class.java)
     }
     
     @Provides
@@ -153,4 +178,25 @@ object AppModule {
 
     // CloudstreamProviderRuntime is @Singleton @Inject — Hilt constructs it
     // directly, no @Provides needed.
+
+    @Provides
+    @Singleton
+    fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
+        return AppDatabase.getInstance(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideHomeRowDao(database: AppDatabase): HomeRowDao {
+        return database.homeRowDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideLocalHomeRepository(
+        homeRowDao: HomeRowDao,
+        tmdbApi: TmdbApi
+    ): LocalHomeRepository {
+        return LocalHomeRepository(homeRowDao, tmdbApi)
+    }
 }

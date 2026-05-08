@@ -89,6 +89,13 @@ sealed class AppException(
      *
      * Example: "No internet connection [ERR_NO_CONNECTION]"
      */
+    val formattedMessage: String get() = toSupportString()
+
+    /**
+     * Returns a formatted error string for support troubleshooting.
+     *
+     * Example: "No internet connection [ERR_NO_CONNECTION]"
+     */
     fun toSupportString(): String {
         return if (errorCode != null) {
             "$message [$errorCode]"
@@ -100,7 +107,7 @@ sealed class AppException(
     /**
      * Returns true if this error is potentially recoverable by retrying.
      */
-    fun isRetryable(): Boolean = when (this) {
+    val isRetryable: Boolean get() = when (this) {
         is Network -> true
         is Server -> httpCode in 500..599
         is Auth -> false

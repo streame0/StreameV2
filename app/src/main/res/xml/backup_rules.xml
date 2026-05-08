@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Exclude sensitive DataStore files (Trakt tokens, auth state, profile data) -->
+    <exclude domain="sharedpref" path="." />
+    <!-- Exclude Room database (watch history, home rows, catalog configs) -->
+    <exclude domain="database" path="." />
+    <!-- Exclude cache dirs (HTTP cache, image cache) -->
+    <exclude domain="cache" path="." />
+    <!-- Exclude external cache -->
+    <exclude domain="externalcache" path="." />
+    <!-- Exclude no_backup files -->
+    <exclude domain="no_backup" path="." />
+</full-backup-content>

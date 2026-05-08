@@ -6,6 +6,9 @@ import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
 import com.streame.tv.data.model.Category
 import com.streame.tv.data.repository.MediaRepository
+import com.streame.tv.di.DispatcherProvider
+import com.streame.tv.util.AppException
+import com.streame.tv.util.toAppException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
@@ -74,7 +77,8 @@ data class SearchUiState(
     val movieResults: List<MediaItem> = EMPTY_MEDIA_ITEMS,
     val tvResults: List<MediaItem> = EMPTY_MEDIA_ITEMS,
     val cardLogoUrls: Map<String, String> = EMPTY_LOGO_URLS,
-    val error: String? = null,
+    val error: AppException? = null,
+    val retryAction: (() -> Unit)? = null,
     // Discover rows - always 5 rows, dynamically built from active filters
     val discoverCategories: List<Category> = EMPTY_MEDIA_ITEMS as List<Category>,
     val discoverLogoUrls: Map<String, String> = EMPTY_LOGO_URLS,
@@ -87,11 +91,15 @@ data class SearchUiState(
     val aiInterpretation: String? = null,
     val aiResults: List<MediaItem> = EMPTY_MEDIA_ITEMS,
     val isAiSearch: Boolean = false
-)
+) {
+    val errorMessage: String? get() = error?.formattedMessage
+    val isRetryable: Boolean get() = error?.isRetryable == true
+}
 
 @HiltViewModel
 class SearchViewModel @Inject constructor(
-    private val mediaRepository: MediaRepository
+    private val mediaRepository: MediaRepository,
+    private val dispatcherProvider: DispatcherProvider
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SearchUiState())
@@ -109,7 +117,7 @@ class SearchViewModel @Inject constructor(
     private fun loadDiscoverRows() {
         discoverJob?.cancel()
         val state = _uiState.value
-        _uiState.value = state.copy(isDiscoverLoading = true)
+        _uiState.value = state.copy(isDiscoverLoading = true, error = null)
 
         discoverJob = viewModelScope.launch {
             try {
@@ -126,7 +134,7 @@ class SearchViewModel @Inject constructor(
                 cal.add(java.util.Calendar.YEAR, -1)
                 val oneYearAgo = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(cal.time)
 
-                val categories = withContext(Dispatchers.IO) {
+                val categories = withContext(dispatcherProvider.io) {
                     coroutineScope {
                         // Row 1: Trending - popular with minimum votes to filter garbage
                         val row1 = async { buildRow("Trending", type, genre, "popularity.desc", 50, lang, isAnime, 1, releaseDateLte = today) }
@@ -154,8 +162,12 @@ class SearchViewModel @Inject constructor(
                     }.awaitAll().filterNotNull().toMap()
                     _uiState.value = _uiState.value.copy(discoverLogoUrls = _uiState.value.discoverLogoUrls + logos)
                 }
-            } catch (_: Exception) {
-                _uiState.value = _uiState.value.copy(isDiscoverLoading = false)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isDiscoverLoading = false,
+                    error = e.toAppException(),
+                    retryAction = { loadDiscoverRows() }
+                )
             }
         }
     }
@@ -228,9 +240,9 @@ class SearchViewModel @Inject constructor(
                 else { val f = mediaRepository.search(query); val s = sortResults(query, f); cachedSuggestionQuery = query; cachedSuggestionResults = s; s }
                 val movies = sorted.filter { it.mediaType == MediaType.MOVIE }; val tv = sorted.filter { it.mediaType == MediaType.TV }
                 val top = (movies.take(16) + tv.take(16)).distinctBy { "${it.mediaType}_${it.id}" }
-                val logos = withContext(Dispatchers.IO) { top.map { item -> async { val k = "${item.mediaType}_${item.id}"; val l = runCatching { mediaRepository.getLogoUrl(item.mediaType, item.id) }.getOrNull(); if (l.isNullOrBlank()) null else k to l } }.awaitAll().filterNotNull().toMap() }
+                val logos = withContext(dispatcherProvider.io) { top.map { item -> async { val k = "${item.mediaType}_${item.id}"; val l = runCatching { mediaRepository.getLogoUrl(item.mediaType, item.id) }.getOrNull(); if (l.isNullOrBlank()) null else k to l } }.awaitAll().filterNotNull().toMap() }
                 _uiState.value = _uiState.value.copy(isLoading = false, results = sorted, movieResults = movies, tvResults = tv, cardLogoUrls = logos)
-            } catch (e: Exception) { _uiState.value = _uiState.value.copy(isLoading = false, error = e.message) }
+            } catch (e: Exception) { _uiState.value = _uiState.value.copy(isLoading = false, error = e.toAppException(), retryAction = { search() }) }
         }
     }
 
@@ -257,12 +269,12 @@ class SearchViewModel @Inject constructor(
         searchJob?.cancel(); searchJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, isAiSearch = true, aiInterpretation = sq.interpretation, error = null, movieResults = EMPTY_MEDIA_ITEMS, tvResults = EMPTY_MEDIA_ITEMS)
             try {
-                val items = withContext(Dispatchers.IO) {
+                val items = withContext(dispatcherProvider.io) {
                     if (sq.similarTo != null) { val r = mediaRepository.search(sq.similarTo); val m = r.firstOrNull(); if (m != null) mediaRepository.getSimilar(m.mediaType, m.id) else EMPTY_MEDIA_ITEMS }
                     else when (sq.type) { DiscoverType.MOVIES -> mediaRepository.discoverMovies(sq.genreId, sq.sort, sq.minVotes, 1); DiscoverType.TV_SHOWS -> mediaRepository.discoverTv(sq.genreId, sq.sort, sq.minVotes, 1); DiscoverType.ANIME -> mediaRepository.discoverTv(if (sq.genreId != null) "16,${sq.genreId}" else "16", sq.sort, sq.minVotes, 1, keywords = "210024"); DiscoverType.ALL -> { coroutineScope { val a = async { mediaRepository.discoverMovies(sq.genreId, sq.sort, sq.minVotes, 1) }; val b = async { mediaRepository.discoverTv(sq.genreId, sq.sort, sq.minVotes, 1) }; interleave(a.await(), b.await()) } } }
                 }
                 _uiState.value = _uiState.value.copy(isLoading = false, aiResults = if (sq.limit != null) items.take(sq.limit) else items)
-            } catch (e: Exception) { _uiState.value = _uiState.value.copy(isLoading = false, error = e.message) }
+            } catch (e: Exception) { _uiState.value = _uiState.value.copy(isLoading = false, error = e.toAppException(), retryAction = { executeSmartSearch(sq) }) }
         }
     }
 

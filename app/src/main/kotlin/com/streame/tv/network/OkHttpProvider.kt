@@ -29,8 +29,8 @@ import java.util.concurrent.TimeUnit
 /**
  * Provides a configured OkHttpClient instance.
  *
- * All TMDB and Trakt API calls are routed through Supabase Edge Functions
- * via ApiProxyInterceptor. This keeps API keys secure on the server.
+ * TMDB calls go direct with the hardcoded API key.
+ * Trakt calls go direct with the hardcoded Client ID.
  *
  * SSL/TLS validation is handled by NetworkSecurityConfig (res/xml/network_security_config.xml):
  * - Release: System certificates only (secure)
@@ -129,15 +129,6 @@ object OkHttpProvider {
         }
     }
 
-    private val apiDnsLoggingInterceptor = Interceptor { chain ->
-        val request = chain.request()
-        Log.i(
-            TAG,
-            "API request dnsProvider=$selectedDnsProvider method=${request.method} host=${request.url.host} url=${request.url}"
-        )
-        chain.proceed(request)
-    }
-
     private fun selectedDns(provider: AppDnsProvider): Dns {
         return when (provider) {
             AppDnsProvider.SYSTEM -> systemDns
@@ -152,27 +143,71 @@ object OkHttpProvider {
             appClient ?: buildAppClient().also { appClient = it }
         }
 
-    private fun buildAppClient(): OkHttpClient {
-        val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = if (BuildConfig.DEBUG) {
-                HttpLoggingInterceptor.Level.BASIC
+    /** Logging interceptor: logs request host + HTTP status (or exception) for every call.
+     *  Always active so release builds can be diagnosed via Logcat. */
+    private val appLoggingInterceptor = Interceptor { chain ->
+        val request = chain.request()
+        val host = request.url.host
+        val method = request.method
+        try {
+            val response = chain.proceed(request)
+            Log.i(TAG, "HTTP $method $host -> ${response.code}")
+            response
+        } catch (e: Exception) {
+            Log.e(TAG, "HTTP $method $host FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            throw e
+        }
+    }
+
+    /** Interceptor that rewrites TMDB API response headers to ensure they are
+     *  cacheable for at least 10 minutes. TMDB sometimes returns short or
+     *  no-cache headers on certain endpoints, which defeats OkHttp's disk cache
+     *  and forces a full network round-trip on every app launch. By forcing a
+     *  minimum max-age, repeat visits to the same screen are instant. */
+    private val tmdbCacheInterceptor = Interceptor { chain ->
+        val request = chain.request()
+        val response = chain.proceed(request)
+        val host = request.url.host
+        val isTmdbApi = host.contains("api.themoviedb", ignoreCase = true)
+                || host.contains("api.tmdb", ignoreCase = true)
+        if (isTmdbApi && request.method == "GET" && response.isSuccessful) {
+            val existingMaxAge = response.cacheControl.maxAgeSeconds
+            if (existingMaxAge < 600) { // less than 10 minutes
+                val newHeaders = response.headers.newBuilder()
+                    .set("Cache-Control", "public, max-age=600")
+                    .build()
+                response.newBuilder()
+                    .headers(newHeaders)
+                    .build()
             } else {
-                HttpLoggingInterceptor.Level.NONE
+                response
             }
+        } else {
+            response
+        }
+    }
+
+    private fun buildAppClient(): OkHttpClient {
+        val builder = OkHttpClient.Builder()
+            .addInterceptor(appLoggingInterceptor)
+
+        // Only add verbose HTTP logging in debug builds to reduce log spam
+        // and main-thread overhead in release builds
+        if (BuildConfig.DEBUG) {
+            val loggingInterceptor = HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BASIC
+            }
+            builder.addInterceptor(loggingInterceptor)
         }
 
-        val builder = OkHttpClient.Builder()
-            .addInterceptor(loggingInterceptor)
+        builder
+            .addNetworkInterceptor(tmdbCacheInterceptor)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .connectionPool(appConnectionPool)
             .dns(dns)
             .retryOnConnectionFailure(true)
-
-        if (BuildConfig.DEBUG) {
-            builder.addInterceptor(apiDnsLoggingInterceptor)
-        }
 
         appContext?.let { ctx ->
             builder.cache(getOrCreateHttpCache(ctx))

@@ -73,9 +73,7 @@ import com.streame.tv.R
 fun ProfileSelectionScreen(
     viewModel: ProfileViewModel = hiltViewModel(),
     onProfileSelected: () -> Unit,
-    onShowAddProfile: () -> Unit,
-    onConnectCloud: () -> Unit = {},
-    isCloudConnected: Boolean = false
+    onShowAddProfile: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -280,19 +278,6 @@ fun ProfileSelectionScreen(
                 }
             )
 
-            if (!isCloudConnected) {
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Cloud connect button — focusable on TV, tappable on mobile
-                CloudConnectButton(
-                    onClick = {
-                        if ((isTouchDevice || isReadyForInput) && !uiState.isSwitchingProfile) {
-                            onConnectCloud()
-                        }
-                    }
-                )
-            }
-
             if (uiState.isSwitchingProfile) {
                 Spacer(modifier = Modifier.height(18.dp))
                 Text(
@@ -409,7 +394,7 @@ private fun ProfileAvatar(
                         )
                     } else {
                         Text(
-                            text = profile.name.firstOrNull()?.uppercase() ?: "?",
+                            text = profile.name?.firstOrNull()?.uppercase() ?: "?",
                             fontSize = 48.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -596,86 +581,5 @@ private fun ManageProfilesButton(
             color = Color.White,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
         )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun CloudConnectButton(
-    onClick: () -> Unit
-) {
-    val isTouchDevice = LocalDeviceType.current.isTouchDevice()
-    var isFocused by remember { mutableIntStateOf(0) }
-
-    if (isTouchDevice) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(24.dp))
-                .background(
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF6C63FF).copy(alpha = 0.25f),
-                            Color(0xFF00D4FF).copy(alpha = 0.18f)
-                        )
-                    )
-                )
-                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
-                .clickable { onClick() }
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Cloud,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.size(18.dp)
-            )
-            Text(
-                text = stringResource(R.string.connect_to_cloud),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.85f)
-            )
-        }
-    } else {
-        Surface(
-            onClick = onClick,
-            modifier = Modifier.onFocusChanged { isFocused = if (it.isFocused) 1 else 0 },
-            shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(24.dp)),
-            colors = ClickableSurfaceDefaults.colors(
-                containerColor = Color.White.copy(alpha = 0.06f),
-                focusedContainerColor = Color.White.copy(alpha = 0.18f)
-            ),
-            border = ClickableSurfaceDefaults.border(
-                border = androidx.tv.material3.Border(
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                    shape = RoundedCornerShape(24.dp)
-                ),
-                focusedBorder = androidx.tv.material3.Border(
-                    border = androidx.compose.foundation.BorderStroke(2.dp, Color.White.copy(alpha = 0.6f)),
-                    shape = RoundedCornerShape(24.dp)
-                )
-            )
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Cloud,
-                    contentDescription = null,
-                    tint = if (isFocused > 0) Color.White else Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    text = stringResource(R.string.connect_to_cloud),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (isFocused > 0) Color.White else Color.White.copy(alpha = 0.7f)
-                )
-            }
-        }
     }
 }
