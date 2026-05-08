@@ -381,11 +381,11 @@ class HomeViewModel @Inject constructor(
     private val backdropPreloadWidth = cardBackdropWidth
     private val backdropPreloadHeight = cardBackdropHeight
     private val initialLogoPrefetchRows = 1
-    private val initialLogoPrefetchItemsPerRow = if (isLowRamDevice) 1 else 2
+    private val initialLogoPrefetchItemsPerRow = if (isLowRamDevice) 2 else 4
     // Prefetch enough backdrops to fill the first visible row on the home screen
-    // (typically 6-8 cards on a TV). Was 2, which left the majority of the first
-    // row unpreloaded on cold start, causing visible black -> image pop-in.
-    private val initialBackdropPrefetchItems = 1
+    // (typically 6-8 cards on a TV). Increased from 1 to 4 so the first row
+    // appears populated on cold start instead of showing black -> image pop-in.
+    private val initialBackdropPrefetchItems = if (isLowRamDevice) 2 else 4
     private val incrementalLogoPrefetchItems = if (isLowRamDevice) 4 else 6
     private val prioritizedLogoPrefetchItems = if (isLowRamDevice) 5 else 7
     private val incrementalBackdropPrefetchItems = if (isLowRamDevice) 4 else 7

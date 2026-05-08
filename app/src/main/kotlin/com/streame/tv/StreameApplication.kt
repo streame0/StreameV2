@@ -176,17 +176,14 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             .okHttpClient(OkHttpProvider.coilClient)
             .memoryCache {
                 MemoryCache.Builder(this)
-                    // The 2 GB Android TV dump showed Streame spending most of
-                    // its memory in native bitmap/texture allocations
-                    // (255 MB native heap, 77 MB GPU cache). Use a fixed TV
-                    // image budget instead of a percent of largeHeap memory so
-                    // low-RAM TVs do not drift into zram pressure while rows
-                    // are being scrolled.
+                    // Increased memory budgets: more in-memory bitmaps = fewer
+                    // disk reads and network fetches during scrolling.
+                    // Low-RAM TVs stay conservative to avoid zram pressure.
                     .maxSizeBytes(
                         when {
                             isTvDevice && isLowRamDevice -> 32 * 1024 * 1024
-                            isTvDevice -> 48 * 1024 * 1024
-                            else -> 64 * 1024 * 1024
+                            isTvDevice -> 80 * 1024 * 1024
+                            else -> 96 * 1024 * 1024
                         }
                     )
                     .build()
@@ -194,7 +191,15 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(if (isTvDevice) 128L * 1024L * 1024L else 96L * 1024L * 1024L)
+                    // Increased disk cache to avoid evictions between sessions.
+                    // A typical home screen touches 30-50MB per session.
+                    .maxSizeBytes(
+                        when {
+                            isTvDevice && isLowRamDevice -> OkHttpProvider.IMAGE_DISK_CACHE_SIZE_LOW_RAM
+                            isTvDevice -> OkHttpProvider.IMAGE_DISK_CACHE_SIZE_TV
+                            else -> OkHttpProvider.IMAGE_DISK_CACHE_SIZE_MOBILE
+                        }
+                    )
                     .build()
             }
             .crossfade(false)

@@ -6,7 +6,6 @@ import android.util.Log
 import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
-import com.streame.tv.BuildConfig
 import okhttp3.Cache
 import okhttp3.ConnectionPool
 import okhttp3.Dns
@@ -14,7 +13,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.dnsoverhttps.DnsOverHttps
-import okhttp3.logging.HttpLoggingInterceptor
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +40,11 @@ object OkHttpProvider {
     private const val TAG = "AppDns"
     /** 50 MB disk cache for API responses (TMDB metadata, Trakt data, etc.) */
     private const val HTTP_CACHE_SIZE = 50L * 1024L * 1024L
-    private const val IMAGE_DISK_CACHE_SIZE = 48L * 1024L * 1024L
+    // Image disk cache — increased to avoid evictions between sessions.
+    // A typical home screen touches 30-50MB per session; 48MB was evicting half the cache.
+    const val IMAGE_DISK_CACHE_SIZE_TV = 256L * 1024L * 1024L
+    const val IMAGE_DISK_CACHE_SIZE_MOBILE = 192L * 1024L * 1024L
+    const val IMAGE_DISK_CACHE_SIZE_LOW_RAM = 96L * 1024L * 1024L
     private const val CLOUDFLARE_DOH_HOST = "cloudflare-dns.com"
     private const val CLOUDFLARE_DOH_URL = "https://cloudflare-dns.com/dns-query"
     private const val GOOGLE_DOH_HOST = "dns.google"
@@ -144,14 +146,20 @@ object OkHttpProvider {
         }
 
     /** Logging interceptor: logs request host + HTTP status (or exception) for every call.
-     *  Always active so release builds can be diagnosed via Logcat. */
+     *  Skips image CDN hosts (image.tmdb.org) to reduce logcat noise — those are
+     *  handled by the CDN cache interceptor. Uses Log.d for success to reduce
+     *  logcat spam; Log.e for failures (always visible). */
     private val appLoggingInterceptor = Interceptor { chain ->
         val request = chain.request()
         val host = request.url.host
+        // Skip verbose logging for image CDN — these are high-volume, low-value logs
+        if (host.contains("image.tmdb", ignoreCase = true)) {
+            return@Interceptor chain.proceed(request)
+        }
         val method = request.method
         try {
             val response = chain.proceed(request)
-            Log.i(TAG, "HTTP $method $host -> ${response.code}")
+            Log.d(TAG, "HTTP $method $host -> ${response.code}")
             response
         } catch (e: Exception) {
             Log.e(TAG, "HTTP $method $host FAILED: ${e.javaClass.simpleName}: ${e.message}")
@@ -190,15 +198,6 @@ object OkHttpProvider {
     private fun buildAppClient(): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .addInterceptor(appLoggingInterceptor)
-
-        // Only add verbose HTTP logging in debug builds to reduce log spam
-        // and main-thread overhead in release builds
-        if (BuildConfig.DEBUG) {
-            val loggingInterceptor = HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
-            }
-            builder.addInterceptor(loggingInterceptor)
-        }
 
         builder
             .addNetworkInterceptor(tmdbCacheInterceptor)
@@ -339,30 +338,65 @@ object OkHttpProvider {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
-            .connectionPool(ConnectionPool(8, 30, TimeUnit.SECONDS))
+            // 16 connections with 60s keepalive — home screen fires 20+ parallel image
+            // requests; 8 connections caused queuing and slow card loading.
+            .connectionPool(ConnectionPool(16, 60, TimeUnit.SECONDS))
+            .addNetworkInterceptor(imageCdnCacheInterceptor)
             .dns(dns)
             .retryOnConnectionFailure(true)
             .build()
     }
 
+    /** Network interceptor that forces long cache lifetime for image.tmdb.org
+     *  responses. The TMDB image CDN sometimes returns short max-age or no-cache
+     *  headers, which defeats OkHttp's disk cache and forces a full network
+     *  round-trip on every app launch. By forcing max-age=86400 (24h), cached
+     *  images are served directly from disk without any network I/O. */
+    private val imageCdnCacheInterceptor = Interceptor { chain ->
+        val request = chain.request()
+        val response = chain.proceed(request)
+        val host = request.url.host
+        if (host.contains("image.tmdb", ignoreCase = true)
+            && request.method == "GET" && response.isSuccessful
+        ) {
+            val existingMaxAge = response.cacheControl.maxAgeSeconds
+            if (existingMaxAge < 86400) { // less than 24 hours
+                response.newBuilder()
+                    .header("Cache-Control", "public, max-age=86400")
+                    .build()
+            } else {
+                response
+            }
+        } else {
+            response
+        }
+    }
+
     fun createCoilImageLoader(context: Context): ImageLoader {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        val imageCacheBytes = if (activityManager?.isLowRamDevice == true) {
-            32 * 1024 * 1024
-        } else {
-            48 * 1024 * 1024
+        val isLowRam = activityManager?.isLowRamDevice == true
+        val isTv = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+        val memoryCacheBytes = when {
+            isLowRam -> 32 * 1024 * 1024
+            isTv -> 80 * 1024 * 1024
+            else -> 96 * 1024 * 1024
+        }
+        val diskCacheBytes = when {
+            isLowRam -> IMAGE_DISK_CACHE_SIZE_LOW_RAM
+            isTv -> IMAGE_DISK_CACHE_SIZE_TV
+            else -> IMAGE_DISK_CACHE_SIZE_MOBILE
         }
         return ImageLoader.Builder(context)
             .okHttpClient(coilClient)
             .memoryCache {
                 MemoryCache.Builder(context)
-                    .maxSizeBytes(imageCacheBytes)
+                    .maxSizeBytes(memoryCacheBytes)
                     .build()
             }
             .diskCache {
                 DiskCache.Builder()
                     .directory(context.cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(IMAGE_DISK_CACHE_SIZE)
+                    .maxSizeBytes(diskCacheBytes)
                     .build()
             }
             .crossfade(false)

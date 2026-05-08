@@ -17,10 +17,12 @@ object Constants {
     val TMDB_API_KEY: String get() = com.streame.tv.BuildConfig.TMDB_API_KEY
     val TRAKT_CLIENT_ID: String get() = com.streame.tv.BuildConfig.TRAKT_CLIENT_ID
     val TRAKT_CLIENT_SECRET: String get() = com.streame.tv.BuildConfig.TRAKT_CLIENT_SECRET
-    // Image URLs - tuned for TV quality with smooth scrolling/perf.
-    const val IMAGE_BASE = "https://image.tmdb.org/t/p/w780"
+    // Image URLs - tuned for fast loading with smooth scrolling/perf.
+    // Card posters use w500 (sufficient for ~140dp cards, ~40% smaller than w780).
+    // Card backdrops use w780 (sufficient for ~210dp landscape cards).
+    const val IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
     const val IMAGE_BASE_LARGE = "https://image.tmdb.org/t/p/w1280"
-    const val BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
+    const val BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
     // Full quality for hero and detail backdrops — restored to "original" so
     // 4K TV users get the sharpest image. The loading speed issue is addressed
     // by aggressive preloading + disk caching (not by resolution downgrade).

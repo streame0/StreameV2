@@ -488,8 +488,10 @@ fun PlayerScreen(
             .setBufferDurationsMs(
                 12_000,    // minBufferMs
                 45_000,    // maxBufferMs
-                500,       // bufferForPlaybackMs
-                2_000      // bufferForPlaybackAfterRebufferMs
+                1_500,     // bufferForPlaybackMs — raised from 500 to prevent
+                            // audio underrun stutter on TV devices with slower storage
+                5_000      // bufferForPlaybackAfterRebufferMs — raised from 2000
+                            // to prevent post-rebuffer audio stutter
             )
             .setTargetBufferBytes(80 * 1024 * 1024)   // 80 MB hard cap
             .setPrioritizeTimeOverSizeThresholds(false) // byte cap is authoritative
@@ -536,6 +538,15 @@ fun PlayerScreen(
                         // TVs typically have E-AC3 decoders and need this set to true.
                         .setExceedAudioConstraintsIfNecessary(isTv)
                         .setExceedRendererCapabilitiesIfNecessary(isTv)
+                        // On TV, cap audio at 6 channels / 640 kbps to avoid selecting
+                        // unsupported 7.1 or DTS-HD tracks that cause silent playback.
+                        // Most TV soundbars support up to 5.1 (6 ch) E-AC3.
+                        .apply {
+                            if (isTv) {
+                                setMaxAudioChannelCount(6)
+                                setMaxAudioBitrate(640_000)
+                            }
+                        }
                     parameters = paramsBuilder.build()
                 }
             )
