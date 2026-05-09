@@ -175,6 +175,41 @@ class ProfileRepository @Inject constructor(
         )
     }
 
+    /**
+     * Link a cloud account (Supabase user) to a local profile.
+     * Each profile can have its own independent cloud account.
+     */
+    suspend fun linkCloudAccount(profileId: String, cloudUserId: String, cloudEmail: String) {
+        context.profilesDataStore.edit { prefs ->
+            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
+            val index = currentList.indexOfFirst { it.id == profileId }
+            if (index >= 0) {
+                currentList[index] = currentList[index].copy(
+                    cloudUserId = cloudUserId,
+                    cloudEmail = cloudEmail
+                )
+                prefs[PROFILES_KEY] = encodeProfiles(currentList)
+            }
+        }
+    }
+
+    /**
+     * Clear the cloud account link from a profile.
+     */
+    suspend fun clearCloudLink(profileId: String) {
+        context.profilesDataStore.edit { prefs ->
+            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
+            val index = currentList.indexOfFirst { it.id == profileId }
+            if (index >= 0) {
+                currentList[index] = currentList[index].copy(
+                    cloudUserId = null,
+                    cloudEmail = null
+                )
+                prefs[PROFILES_KEY] = encodeProfiles(currentList)
+            }
+        }
+    }
+
     private fun decodeProfiles(json: String?): List<Profile> {
         if (json.isNullOrBlank()) return emptyList()
         return try {

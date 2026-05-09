@@ -60,7 +60,8 @@ class TraktRepository @Inject constructor(
     private val traktApi: TraktApi,
     private val tmdbApi: TmdbApi,
     private val syncServiceProvider: Provider<TraktSyncService>,
-    private val profileManager: ProfileManager
+    private val profileManager: ProfileManager,
+    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
 ) {
     private val gson = Gson()
     private val watchlistHttpClient by lazy { OkHttpClient() }
@@ -428,6 +429,7 @@ class TraktRepository @Inject constructor(
         updateWatchedCache(tmdbId, null, null, true)
         persistLocalWatchedSnapshotForCurrentProfile()
         removeFromContinueWatchingCache(tmdbId, null, null)
+        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markMovieWatched")
 
         // Then sync to backend in background
         try {
@@ -445,6 +447,7 @@ class TraktRepository @Inject constructor(
         // OPTIMISTIC UPDATE: Update cache immediately so the UI responds instantly
         updateWatchedCache(tmdbId, null, null, false)
         persistLocalWatchedSnapshotForCurrentProfile()
+        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markMovieUnwatched")
 
         // Then sync to backend in background
         try {
@@ -464,6 +467,7 @@ class TraktRepository @Inject constructor(
         updateShowWatchedCache(showTmdbId, season, episode, true)
         persistLocalWatchedSnapshotForCurrentProfile()
         removeFromContinueWatchingCache(showTmdbId, season, episode)
+        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markEpisodeWatched")
 
         // Then sync to backend in background (don't block UI on network)
         try {
@@ -481,6 +485,7 @@ class TraktRepository @Inject constructor(
         updateWatchedCache(showTmdbId, season, episode, false)
         updateShowWatchedCache(showTmdbId, season, episode, false)
         persistLocalWatchedSnapshotForCurrentProfile()
+        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markEpisodeUnwatched")
 
         // Then sync to backend in background
         try {
@@ -1710,6 +1715,47 @@ class TraktRepository @Inject constructor(
         return movies to episodes
     }
 
+    /**
+     * Merge cloud watched items into local watched cache.
+     * Adds items not already tracked locally, then persists and refreshes the in-memory cache.
+     */
+    suspend fun mergeWatchedFromCloud(cloudItems: List<com.streame.tv.data.remote.supabase.SupabaseWatchedItem>) {
+        if (cloudItems.isEmpty()) return
+        ensureProfileCacheScope()
+        val (localMovies, localEpisodes) = loadLocalWatchedSnapshotForCurrentProfile()
+        val mergedMovies = localMovies.toMutableSet()
+        val mergedEpisodes = localEpisodes.toMutableSet()
+        var added = 0
+        cloudItems.forEach { cloud ->
+            val tmdbId = cloud.contentId.toIntOrNull() ?: return@forEach
+            if (cloud.contentType == "movie") {
+                if (!mergedMovies.contains(tmdbId)) {
+                    mergedMovies.add(tmdbId)
+                    watchedMoviesCache.add(tmdbId)
+                    added++
+                }
+            } else {
+                // TV episode: key format "show_tmdb:<showId>:<season>:<episode>"
+                val key = if (cloud.season != null && cloud.episode != null)
+                    "show_tmdb:$tmdbId:${cloud.season}:${cloud.episode}" else return@forEach
+                if (!mergedEpisodes.contains(key)) {
+                    mergedEpisodes.add(key)
+                    watchedEpisodesCache.add(key)
+                    added++
+                }
+            }
+        }
+        if (added > 0) {
+            // Persist to DataStore
+            val movieIds = mergedMovies.toList().sorted()
+            val episodeKeys = mergedEpisodes.toList().distinct().sorted()
+            context.traktDataStore.edit { prefs ->
+                prefs[localWatchedMoviesKey()] = gson.toJson(movieIds)
+                prefs[localWatchedEpisodesKey()] = gson.toJson(episodeKeys)
+            }
+        }
+    }
+
     private fun decodeContinueWatchingList(json: String): List<ContinueWatchingItem> {
         if (json.isBlank()) return emptyList()
         return try {
@@ -1876,6 +1922,7 @@ class TraktRepository @Inject constructor(
                 val posterUrl = details?.posterPath?.let { "${Constants.IMAGE_BASE}$it" }
 
                 item.copy(
+                    title = if (item.title.startsWith("tmdb:")) details?.name ?: item.title else item.title,
                     overview = details?.overview ?: "",  // Show overview, not episode
                     backdropPath = backdropUrl ?: item.backdropPath,  // Show backdrop, not episode still
                     posterPath = posterUrl ?: item.posterPath,
@@ -1894,6 +1941,7 @@ class TraktRepository @Inject constructor(
                 val posterUrl = details?.posterPath?.let { "${Constants.IMAGE_BASE}$it" }
 
                 item.copy(
+                    title = if (item.title.startsWith("tmdb:")) details?.title ?: item.title else item.title,
                     overview = details?.overview ?: "",
                     backdropPath = backdropUrl ?: item.backdropPath,
                     posterPath = posterUrl ?: item.posterPath,

@@ -7,6 +7,9 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 /**
  * Watch history entry (local only — no Supabase)
@@ -41,12 +44,19 @@ data class WatchHistoryEntry(
 @Singleton
 class WatchHistoryRepository @Inject constructor(
     private val authRepositoryProvider: Provider<AuthRepository>,
-    private val profileManager: ProfileManager
+    private val profileManager: ProfileManager,
+    private val watchProgressSyncService: com.streame.tv.data.sync.WatchProgressSyncService,
+    private val authManager: com.streame.tv.data.repository.AuthManager,
+    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
 ) {
     @Volatile
     private var cachedContinueWatching: List<WatchHistoryEntry> = emptyList()
     private val cachedContinueWatchingByProfile = ConcurrentHashMap<String, List<WatchHistoryEntry>>()
     private val cachedWatchHistoryByProfile = ConcurrentHashMap<String, List<WatchHistoryEntry>>()
+
+    /** Emits Unit whenever cloud data is merged into the local cache. Uses replay=1 so late subscribers still receive the event. */
+    private val _cloudMergeEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1, replay = 1)
+    val cloudMergeEvents: SharedFlow<Unit> = _cloudMergeEvents.asSharedFlow()
 
     private fun currentProfileId(): String = profileManager.getProfileIdSync().ifBlank { "default" }
 
@@ -121,6 +131,13 @@ class WatchHistoryRepository @Inject constructor(
             }
         }
         cachedContinueWatchingByProfile[profileId] = cachedContinueWatching
+
+        // Push to Supabase if authenticated
+        pushWatchProgressToRemote()
+        invalidationBus.markDirty(
+            com.streame.tv.data.sync.CloudSyncScope.WATCH_PROGRESS,
+            reason = "updateContinueWatching"
+        )
     }
 
     @Volatile
@@ -191,6 +208,10 @@ class WatchHistoryRepository @Inject constructor(
         cachedWatchHistoryByProfile[profileId] = cachedWatchHistoryByProfile[profileId]
             .orEmpty()
             .filterNot { it.show_tmdb_id == tmdbId }
+        invalidationBus.markDirty(
+            com.streame.tv.data.sync.CloudSyncScope.WATCH_PROGRESS,
+            reason = "removeFromHistory"
+        )
     }
 
     /**
@@ -200,6 +221,10 @@ class WatchHistoryRepository @Inject constructor(
         val profileId = currentProfileId()
         cachedContinueWatchingByProfile[profileId] = emptyList()
         cachedWatchHistoryByProfile[profileId] = emptyList()
+        invalidationBus.markDirty(
+            com.streame.tv.data.sync.CloudSyncScope.WATCH_PROGRESS,
+            reason = "clearHistory"
+        )
     }
 
     fun clearProfileCaches() {
@@ -209,6 +234,69 @@ class WatchHistoryRepository @Inject constructor(
         cachedWatchHistoryByProfile.clear()
     }
 
+    /**
+     * Merge cloud watch progress items into local cache.
+     * For each progress key, keeps the entry with the higher position.
+     */
+    suspend fun mergeFromCloud(cloudItems: List<com.streame.tv.data.remote.supabase.SupabaseWatchProgress>) {
+        if (cloudItems.isEmpty()) return
+        val profileId = currentProfileId()
+        val existing = cachedContinueWatchingByProfile[profileId].orEmpty().toMutableList()
+        android.util.Log.d("WatchHistoryRepo", "mergeFromCloud: ${cloudItems.size} cloud items, ${existing.size} existing cache entries for profile=$profileId")
+        val existingKeys = existing.associateBy { entry ->
+            if (entry.media_type == "tv") "tv:${entry.show_tmdb_id}:${entry.season}:${entry.episode}" else "movie:${entry.show_tmdb_id}"
+        }
+        var merged = 0
+        cloudItems.forEach { cloud ->
+            val tmdbId = cloud.contentId.toIntOrNull()
+            if (tmdbId == null) {
+                android.util.Log.w("WatchHistoryRepo", "mergeFromCloud: skipping item with non-numeric contentId=${cloud.contentId}, key=${cloud.progressKey}")
+                return@forEach
+            }
+            val userId = authManager.currentSupabaseUserId
+            if (userId == null) {
+                android.util.Log.w("WatchHistoryRepo", "mergeFromCloud: skipping item because currentSupabaseUserId=null, contentId=${cloud.contentId}")
+                return@forEach
+            }
+            val key = cloud.progressKey
+            android.util.Log.d("WatchHistoryRepo", "mergeFromCloud: processing contentId=${cloud.contentId} tmdbId=$tmdbId key=$key contentType=${cloud.contentType} position=${cloud.position} duration=${cloud.duration}")
+            val cloudEntry = WatchHistoryEntry(
+                user_id = userId,
+                profile_id = profileId,
+                media_type = cloud.contentType,
+                show_tmdb_id = tmdbId,
+                season = cloud.season,
+                episode = cloud.episode,
+                progress = if (cloud.duration > 0) (cloud.position.toFloat() / cloud.duration.toFloat()).coerceIn(0f, 1f) else 0f,
+                duration_seconds = cloud.duration,
+                position_seconds = cloud.position,
+                updated_at = java.time.Instant.ofEpochMilli(cloud.lastWatched).toString(),
+                paused_at = java.time.Instant.ofEpochMilli(cloud.lastWatched).toString(),
+                source = profileHistorySource("CloudSync")
+            )
+            val existingEntry = existingKeys[key]
+            if (existingEntry == null) {
+                existing.add(cloudEntry)
+                merged++
+                android.util.Log.d("WatchHistoryRepo", "mergeFromCloud: added new entry for key=$key")
+            } else if (cloud.position > (existingEntry.position_seconds ?: 0L)) {
+                existing.removeAll { it.show_tmdb_id == tmdbId && it.media_type == cloud.contentType && it.season == cloud.season && it.episode == cloud.episode }
+                existing.add(cloudEntry)
+                merged++
+                android.util.Log.d("WatchHistoryRepo", "mergeFromCloud: updated existing entry for key=$key, cloud.position=${cloud.position} > existing=${existingEntry.position_seconds}")
+            } else {
+                android.util.Log.d("WatchHistoryRepo", "mergeFromCloud: skipped key=$key, cloud.position=${cloud.position} <= existing=${existingEntry.position_seconds}")
+            }
+        }
+        if (merged > 0) {
+            cachedContinueWatchingByProfile[profileId] = existing
+            _cloudMergeEvents.tryEmit(Unit)
+            android.util.Log.d("WatchHistoryRepo", "mergeFromCloud: merged $merged items, emitting cloudMergeEvent")
+        } else {
+            android.util.Log.d("WatchHistoryRepo", "mergeFromCloud: 0 items merged (all existing or no new data)")
+        }
+    }
+
     private fun parseEpoch(value: String?): Long {
         if (value.isNullOrBlank()) return 0L
         return try {
@@ -216,6 +304,42 @@ class WatchHistoryRepository @Inject constructor(
         } catch (_: Exception) {
             0L
         }
+    }
+
+    /**
+     * Push current watch progress to Supabase if authenticated.
+     * Fire-and-forget — failures are logged but don't block the user.
+     */
+    private suspend fun pushWatchProgressToRemote() {
+        if (!authManager.isAuthenticated) return
+        try {
+            val profileId = currentProfileId()
+            val entries = cachedContinueWatchingByProfile[profileId].orEmpty()
+            val items = entries.map { entry ->
+                com.streame.tv.data.remote.supabase.SupabaseWatchProgress(
+                    userId = authManager.getEffectiveUserId(fallbackToOwnIdOnFailure = true) ?: "",
+                    contentId = entry.show_tmdb_id.toString(),
+                    contentType = entry.media_type,
+                    videoId = if (entry.media_type == "tv") "${entry.show_tmdb_id}:${entry.season}:${entry.episode}" else entry.show_tmdb_id.toString(),
+                    season = entry.season,
+                    episode = entry.episode,
+                    position = entry.position_seconds ?: 0L,
+                    duration = entry.duration_seconds ?: 0L,
+                    lastWatched = System.currentTimeMillis(),
+                    progressKey = if (entry.media_type == "tv") "tv:${entry.show_tmdb_id}:${entry.season}:${entry.episode}" else "movie:${entry.show_tmdb_id}",
+                    profileId = resolveProfileId()
+                )
+            }
+            watchProgressSyncService.pushToRemote(items, resolveProfileId())
+        } catch (_: Exception) { }
+    }
+
+    private suspend fun resolveProfileId(): Int {
+        val activeId = profileManager.getProfileId()
+        if (activeId == "default") return 1
+        val profiles = profileManager.getProfileList()
+        val index = profiles.indexOfFirst { it.id == activeId }
+        return if (index >= 0) index + 1 else 1
     }
 
     private fun isEntryInProgress(entry: WatchHistoryEntry): Boolean {

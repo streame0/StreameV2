@@ -85,6 +85,7 @@ data class HomeUiState(
     val isHeroTransitioning: Boolean = false,
     val isAuthenticated: Boolean = false,
     val clockFormat: String = "24h",
+    val cloudSyncStatus: com.streame.tv.data.sync.CloudSyncStatus = com.streame.tv.data.sync.CloudSyncStatus.NOT_SIGNED_IN,
     // Toast
     val toastMessage: String? = null,
     val toastType: ToastType = ToastType.INFO
@@ -114,6 +115,7 @@ class HomeViewModel @Inject constructor(
     private val profileManager: ProfileManager,
     private val localHomeRepository: LocalHomeRepository,
     private val networkMonitor: com.streame.tv.network.NetworkMonitor,
+    private val realtimeSyncManager: com.streame.tv.data.sync.RealtimeSyncManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val imageLoader: ImageLoader by lazy(LazyThreadSafetyMode.NONE) {
@@ -391,7 +393,7 @@ class HomeViewModel @Inject constructor(
     private val incrementalBackdropPrefetchItems = if (isLowRamDevice) 4 else 7
     private val initialCategoryItemCap = if (isLowRamDevice) 8 else 10
     private val categoryPageSize = if (isLowRamDevice) 8 else 10
-    private val initialMdblistCatalogCount = 4
+    private val initialMdblistCatalogCount = 6
     private val nearEndThreshold = 4
 
     // Track current focus for ahead-of-focus preloading
@@ -442,13 +444,13 @@ class HomeViewModel @Inject constructor(
     private fun scheduleInitialHomeLoad() {
         viewModelScope.launch {
             applyContentLanguageFromPrefs()
-            delay(if (isLowRamDevice) 1_000L else 800L)
+            delay(if (isLowRamDevice) 600L else 400L)
             if (
                 usedPreloadedData ||
                 _uiState.value.categories.isNotEmpty() ||
                 _uiState.value.heroItem != null
             ) {
-                delayUntilStartupSettled(extraDelayMs = 700L)
+                delayUntilStartupSettled(extraDelayMs = 400L)
             }
             loadHomeData()
         }
@@ -701,7 +703,13 @@ class HomeViewModel @Inject constructor(
             } catch (_: Exception) {}
         }
 
-        // Realtime sync removed — no Supabase
+        // Observe cloud sync status for UI indicator
+        viewModelScope.launch {
+            realtimeSyncManager.syncStatusFlow
+                .collect { status ->
+                    _uiState.value = _uiState.value.copy(cloudSyncStatus = status)
+                }
+        }
 
         // Restore logo URL cache from disk off the main thread. This used to run
         // synchronously during HomeViewModel init, which made the profile->home
@@ -862,6 +870,11 @@ class HomeViewModel @Inject constructor(
                 if (status == com.streame.tv.data.repository.SyncStatus.COMPLETED) {
                     refreshContinueWatchingOnly(force = true)
                 }
+            }
+        }
+        viewModelScope.launch {
+            watchHistoryRepository.cloudMergeEvents.collect {
+                refreshContinueWatchingOnly(force = true)
             }
         }
         viewModelScope.launch {
@@ -1090,10 +1103,12 @@ class HomeViewModel @Inject constructor(
         // a single actual load.
         val requestId = ++loadHomeRequestId
         loadHomeJob?.cancel()
+        val isFirstLoad = _uiState.value.categories.isEmpty()
         loadHomeJob = viewModelScope.launch loadHome@{
             // Debounce: wait briefly so rapid consecutive calls settle before we
             // start any network work. The last caller wins (highest requestId).
-            delay(500)
+            // Skip debounce on first load for instant cold-start display.
+            if (!isFirstLoad) delay(200)
             if (requestId != loadHomeRequestId) return@loadHome
             applyContentLanguageFromPrefs()
 
@@ -1218,6 +1233,32 @@ class HomeViewModel @Inject constructor(
                     val baseCategoriesError = baseCategoriesResult.exceptionOrNull()
                     android.util.Log.w("HomeVM", "baseCategories: ${baseCategories.size} cats, ids=${baseCategories.map { it.id }}, error=$baseCategoriesError")
 
+                    // PROGRESSIVE: Emit base TMDB categories immediately so the user
+                    // sees content within ~1s instead of waiting for all catalogs.
+                    if (baseCategories.isNotEmpty() && requestId == loadHomeRequestId) {
+                        val quickCategories = savedCatalogs.mapNotNull { cfg ->
+                            if (isCollectionRailConfig(cfg) || isCollectionTileConfig(cfg)) return@mapNotNull null
+                            val cat = baseCategories.find { it.id == cfg.id }
+                            cat?.takeIf { it.items.isNotEmpty() }
+                        }
+                        if (quickCategories.isNotEmpty()) {
+                            val existingCW = _uiState.value.categories.firstOrNull {
+                                it.id == "continue_watching" && it.items.isNotEmpty()
+                            }
+                            val displayQuick = if (existingCW != null) {
+                                mutableListOf(existingCW) + quickCategories
+                            } else {
+                                quickCategories.toMutableList()
+                            }
+                            _uiState.value = _uiState.value.copy(
+                                isLoading = true,
+                                isInitialLoad = false,
+                                categories = displayQuick,
+                                error = null
+                            )
+                        }
+                    }
+
                     val baseById = LinkedHashMap<String, Category>().apply {
                         currentBaseCategories.forEach { put(it.id, it) }
                         baseCategories.forEach { put(it.id, it) }
@@ -1270,8 +1311,16 @@ class HomeViewModel @Inject constructor(
                                     limit = if (isHardCappedTop10Catalog(cfg.id)) TOP_10_ITEM_LIMIT else 20
                                 )
                                 if (result.items.isNotEmpty()) {
-                                    Category(id = cfg.id, title = cfg.title, items = result.items)
+                                    val cat = Category(id = cfg.id, title = cfg.title, items = result.items)
                                         .withTop10CapIfNeeded()
+                                    // Progressive: push this catalog to UI immediately
+                                    if (requestId == loadHomeRequestId) {
+                                        val current = _uiState.value.categories.toMutableList()
+                                        val idx = current.indexOfFirst { it.id == cfg.id }
+                                        if (idx >= 0) current[idx] = cat else current.add(cat)
+                                        _uiState.value = _uiState.value.copy(categories = current)
+                                    }
+                                    cat
                                 } else null
                             } catch (_: Exception) { null }
                         }
@@ -1321,11 +1370,9 @@ class HomeViewModel @Inject constructor(
                         .mapNotNull { cfg -> allPreinstalledById[cfg.id] }
                     val customCatalogConfigs = savedCatalogs.filter { cfg -> isCustomCatalogConfig(cfg) }
 
-                    // Fetch ALL custom catalogs (Trakt lists, user-added) in parallel
-                    // right here in the bulk path, instead of deferring to
-                    // loadCustomCatalogsIncrementally which loaded them one-by-one and
-                    // caused slow incremental insertion. This way everything appears in
-                    // the single bulk categories set at line ~1250.
+                    // Fetch ALL custom catalogs (Trakt lists, user-added) in parallel.
+                    // Progressive: emit each catalog as it completes so the user sees
+                    // content appear row-by-row instead of waiting for all to finish.
                     val customSemaphore = kotlinx.coroutines.sync.Semaphore(if (isLowRamDevice) 1 else 4)
                     val freshCustomCategories = customCatalogConfigs.map { cfg ->
                         async(networkDispatcher) {
@@ -1343,6 +1390,13 @@ class HomeViewModel @Inject constructor(
                                             loadedCount = category.items.size,
                                             hasMore = result.hasMore && !isHardCappedTop10Catalog(cfg.id)
                                         )
+                                        // Progressive: push this catalog to UI immediately
+                                        if (requestId == loadHomeRequestId) {
+                                            val current = _uiState.value.categories.toMutableList()
+                                            val idx = current.indexOfFirst { it.id == cfg.id }
+                                            if (idx >= 0) current[idx] = category else current.add(category)
+                                            _uiState.value = _uiState.value.copy(categories = current)
+                                        }
                                         category
                                     } else null
                                 } catch (_: Exception) { null }
@@ -2223,7 +2277,7 @@ class HomeViewModel @Inject constructor(
                 }
                 ContinueWatchingItem(
                     id = entry.show_tmdb_id,
-                    title = entry.title ?: return@mapNotNull null,
+                    title = entry.title ?: "tmdb:${entry.show_tmdb_id}",
                     mediaType = mediaType,
                     progress = derivedPct.coerceIn(0, 100),
                     resumePositionSeconds = entry.position_seconds.coerceAtLeast(0L),
@@ -2257,7 +2311,7 @@ class HomeViewModel @Inject constructor(
                 }
                 ContinueWatchingItem(
                     id = entry.show_tmdb_id,
-                    title = entry.title ?: return@mapNotNull null,
+                    title = entry.title ?: "tmdb:${entry.show_tmdb_id}",
                     mediaType = mediaType,
                     progress = derivedPct.coerceIn(0, 100),
                     resumePositionSeconds = entry.position_seconds.coerceAtLeast(0L),

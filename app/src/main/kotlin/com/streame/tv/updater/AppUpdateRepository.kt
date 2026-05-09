@@ -1,8 +1,6 @@
 package com.streame.tv.updater
 
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
 import com.streame.tv.BuildConfig
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
@@ -31,12 +29,7 @@ class AppUpdateRepository @Inject constructor(
 ) {
     private val gson = Gson()
 
-    fun isPlayStoreInstall(): Boolean {
-        val installer = getInstallerPackageName()
-        return installer == "com.android.vending"
-    }
-
-    fun supportsSelfUpdate(): Boolean = BuildConfig.SELF_UPDATE_ENABLED && !isPlayStoreInstall()
+    fun supportsSelfUpdate(): Boolean = true
 
     /**
      * Returns the actually installed version name from PackageManager,
@@ -93,18 +86,4 @@ class AppUpdateRepository @Inject constructor(
         }
     }
 
-    private fun getInstallerPackageName(): String? {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
-            } else {
-                @Suppress("DEPRECATION")
-                context.packageManager.getInstallerPackageName(context.packageName)
-            }
-        } catch (_: PackageManager.NameNotFoundException) {
-            null
-        } catch (_: Exception) {
-            null
-        }
-    }
 }

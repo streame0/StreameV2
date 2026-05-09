@@ -259,6 +259,8 @@ fun DetailsScreen(
     DisposableEffect(lifecycleOwner, mediaType, mediaId) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                // Re-read autoplay setting so toggle changes in Settings take effect
+                viewModel.refreshAutoPlaySetting()
                 if (ignoreFirstResumeRefresh) {
                     ignoreFirstResumeRefresh = false
                 } else {
@@ -280,6 +282,15 @@ fun DetailsScreen(
     LaunchedEffect(pendingAutoPlayRequest, uiState.isLoadingStreams, uiState.streams) {
         val request = pendingAutoPlayRequest ?: return@LaunchedEffect
         if (uiState.isLoadingStreams) return@LaunchedEffect
+
+        // If autoplay is OFF, always show the stream selector instead of auto-playing
+        if (!uiState.autoPlaySingleSource) {
+            if (uiState.streams.isNotEmpty()) {
+                showStreamSelector = true
+            }
+            pendingAutoPlayRequest = null
+            return@LaunchedEffect
+        }
 
         val validStreams = uiState.streams.filter(::isAutoPlayableStream)
         val minThreshold = minQualityThreshold(uiState.autoPlayMinQuality)
@@ -557,10 +568,15 @@ fun DetailsScreen(
                                 FocusSection.EPISODES -> {
                                     val ep = uiState.episodes.getOrNull(episodeIndex)
                                     if (ep != null) {
-                                        onNavigateToPlayer(
-                                            mediaType, mediaId,
-                                            ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null
-                                        )
+                                        if (!uiState.autoPlaySingleSource) {
+                                            showStreamSelector = true
+                                            viewModel.loadStreams(uiState.imdbId, ep.seasonNumber, ep.episodeNumber)
+                                        } else {
+                                            onNavigateToPlayer(
+                                                mediaType, mediaId,
+                                                ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null
+                                            )
+                                        }
                                     }
                                 }
                                 FocusSection.SEASONS -> {
@@ -710,7 +726,7 @@ fun DetailsScreen(
                         val ep = uiState.episodes.getOrNull(idx)
                         if (ep != null) {
                             episodeIndex = idx
-                            if (isMobile) {
+                            if (isMobile || !uiState.autoPlaySingleSource) {
                                 showStreamSelector = true
                                 viewModel.loadStreams(uiState.imdbId, ep.seasonNumber, ep.episodeNumber)
                             } else {
@@ -837,10 +853,15 @@ fun DetailsScreen(
                 isWatched = episode.isWatched,
                 onPlay = {
                     showEpisodeContextMenu = false
-                    onNavigateToPlayer(
-                        mediaType, mediaId,
-                        episode.seasonNumber, episode.episodeNumber, uiState.imdbId, null, null, null, null
-                    )
+                    if (!uiState.autoPlaySingleSource) {
+                        showStreamSelector = true
+                        viewModel.loadStreams(uiState.imdbId, episode.seasonNumber, episode.episodeNumber)
+                    } else {
+                        onNavigateToPlayer(
+                            mediaType, mediaId,
+                            episode.seasonNumber, episode.episodeNumber, uiState.imdbId, null, null, null, null
+                        )
+                    }
                 },
                 onSelectSource = {
                     showEpisodeContextMenu = false

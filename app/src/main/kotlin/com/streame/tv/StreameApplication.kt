@@ -68,6 +68,12 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
     lateinit var authRepository: AuthRepository
     @Inject
     lateinit var watchlistRepository: WatchlistRepository
+    @Inject
+    lateinit var startupSyncService: com.streame.tv.data.sync.StartupSyncService
+    @Inject
+    lateinit var realtimeSyncManager: com.streame.tv.data.sync.RealtimeSyncManager
+    @Inject
+    lateinit var cloudSyncCoordinator: com.streame.tv.data.sync.CloudSyncCoordinator
 
     override fun onCreate() {
         super.onCreate()
@@ -164,6 +170,13 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             runCatching { profileManager.initialize() }
             // Preload watchlist cache in background for instant display
             runCatching { watchlistRepository.getWatchlistItems() }
+            // Kick off Supabase cloud sync if authenticated
+            runCatching { startupSyncService.pullAllData() }
+            // Start realtime WebSocket + auto-push coordinator
+            runCatching {
+                cloudSyncCoordinator.start()
+                realtimeSyncManager.start()
+            }
         }
     }
 

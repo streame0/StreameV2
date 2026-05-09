@@ -296,6 +296,35 @@ class MediaRepository @Inject constructor(
         return imdbIdCache[cacheKey]
     }
 
+    /**
+     * Fallback IMDb ID resolution: search TMDB by title/year, then fetch external_ids
+     * from the matching result. Used when the direct external_ids endpoint fails or
+     * returns no IMDb ID.
+     */
+    suspend fun searchImdbIdByTitle(title: String, year: Int?, mediaType: MediaType): String? {
+        if (title.isBlank()) return null
+        return try {
+            val searchResult = when (mediaType) {
+                MediaType.MOVIE -> tmdbApi.searchMovies(query = title, year = year, language = contentLanguage)
+                MediaType.TV -> tmdbApi.searchTv(query = title, firstAirDateYear = year, language = contentLanguage)
+            }
+            val match = searchResult.results.firstOrNull {
+                it.title?.equals(title, ignoreCase = true) == true ||
+                it.name?.equals(title, ignoreCase = true) == true
+            } ?: searchResult.results.firstOrNull()
+            val tmdbId = match?.id ?: return null
+            val ids = when (mediaType) {
+                MediaType.MOVIE -> tmdbApi.getMovieExternalIds(tmdbId)
+                MediaType.TV -> tmdbApi.getTvExternalIds(tmdbId)
+            }
+            ids.imdbId?.also { found ->
+                cacheImdbId(mediaType, tmdbId, found)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun cacheItem(item: MediaItem) {
         val cacheKey = if (item.mediaType == MediaType.MOVIE) "movie_${item.id}" else "tv_${item.id}"
         detailsCache[cacheKey] = CacheEntry(item, System.currentTimeMillis())

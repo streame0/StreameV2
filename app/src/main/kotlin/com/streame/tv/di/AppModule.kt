@@ -23,6 +23,8 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import com.streame.tv.data.repository.SyncRepositoryImpl
+import com.streame.tv.domain.repository.SyncRepository
 import javax.inject.Named
 import javax.inject.Singleton
 
@@ -199,4 +201,8 @@ object AppModule {
     ): LocalHomeRepository {
         return LocalHomeRepository(homeRowDao, tmdbApi)
     }
+
+    @Provides
+    @Singleton
+    fun provideSyncRepository(impl: SyncRepositoryImpl): SyncRepository = impl
 }

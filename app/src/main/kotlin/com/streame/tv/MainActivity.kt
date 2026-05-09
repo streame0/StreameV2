@@ -172,6 +172,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var mediaRepository: Lazy<MediaRepository>
 
+    @Inject
+    lateinit var cloudSyncCoordinator: com.streame.tv.data.sync.CloudSyncCoordinator
+
     private var jankStats: JankStats? = null
     private var pendingLauncherRequest by mutableStateOf<LauncherContinueWatchingRequest?>(null)
 
@@ -190,6 +193,12 @@ class MainActivity : ComponentActivity() {
         } else {
             super.attachBaseContext(newBase)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Retry any cloud sync pushes that failed while the app was backgrounded
+        cloudSyncCoordinator.retryIfDirty()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

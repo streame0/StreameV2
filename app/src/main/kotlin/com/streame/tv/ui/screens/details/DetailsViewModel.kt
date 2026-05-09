@@ -929,6 +929,25 @@ class DetailsViewModel @Inject constructor(
     }
 
     /**
+     * Re-read the autoplay setting from DataStore so changes made in Settings
+     * take effect immediately when returning to this screen.
+     */
+    fun refreshAutoPlaySetting() {
+        viewModelScope.launch {
+            val prefs = context.settingsDataStore.data.first()
+            val autoPlaySingleSource = prefs[autoPlaySingleSourceKey()] ?: true
+            val autoPlayMinQuality = normalizeAutoPlayMinQuality(prefs[autoPlayMinQualityKey()])
+            if (_uiState.value.autoPlaySingleSource != autoPlaySingleSource ||
+                _uiState.value.autoPlayMinQuality != autoPlayMinQuality) {
+                _uiState.value = _uiState.value.copy(
+                    autoPlaySingleSource = autoPlaySingleSource,
+                    autoPlayMinQuality = autoPlayMinQuality
+                )
+            }
+        }
+    }
+
+    /**
      * Refresh watched badges and continue target when returning from Player.
      * Uses local caches/history first for near-instant UI updates.
      */
@@ -1165,14 +1184,27 @@ class DetailsViewModel @Inject constructor(
                 currentImdbId = mediaRepository.getCachedImdbId(requestMediaType, requestMediaId)
             }
             if (currentImdbId.isNullOrBlank()) {
-                withTimeoutOrNull(3500) {
+                withTimeoutOrNull(6000) {
                     while (currentImdbId.isNullOrBlank() && isCurrentRequest()) {
                         delay(200)
                         currentImdbId = _uiState.value.imdbId
                     }
                 }
             }
+            // Fallback: try to resolve IMDb ID from TMDB search by title/year
+            if (currentImdbId.isNullOrBlank()) {
+                val title = _uiState.value.item?.title.orEmpty()
+                val year = _uiState.value.item?.year?.toIntOrNull()
+                if (title.isNotBlank()) {
+                    currentImdbId = mediaRepository.searchImdbIdByTitle(title, year, requestMediaType)
+                    if (!currentImdbId.isNullOrBlank()) {
+                        Log.i(TAG, "Fallback IMDb resolution succeeded for '$title': $currentImdbId")
+                    }
+                }
+            }
             val resolvedImdbId = currentImdbId
+            // Whether we have a fallback TMDB ID to query addons with (tmdb: prefix)
+            val hasTmdbFallback = resolvedImdbId.isNullOrBlank() && requestMediaId > 0
 
             _uiState.value = _uiState.value.copy(
                 isLoadingStreams = true,
@@ -1246,10 +1278,10 @@ class DetailsViewModel @Inject constructor(
                         )
                     }
 
-                    if (resolvedImdbId.isNullOrBlank()) {
+                    if (resolvedImdbId.isNullOrBlank() && !hasTmdbFallback) {
                         Log.w(
                             TAG,
-                            "[MovieSources] loadStreams skipped (missing imdbId) requestId=$requestId mediaId=$requestMediaId"
+                            "[MovieSources] loadStreams skipped (no imdbId or tmdbId) requestId=$requestId mediaId=$requestMediaId"
                         )
                         _uiState.value = _uiState.value.copy(
                             isLoadingStreams = false,
@@ -1259,8 +1291,10 @@ class DetailsViewModel @Inject constructor(
                         )
                         return@launch
                     }
+                    // Use IMDb ID if available, otherwise fall back to tmdb: prefix
+                    val streamQueryId = resolvedImdbId ?: "tmdb:$requestMediaId"
                     streamRepository.resolveMovieStreamsProgressive(
-                        imdbId = resolvedImdbId,
+                        imdbId = streamQueryId,
                         title = item?.title.orEmpty(),
                         year = item?.year?.toIntOrNull()
                     ).collect { progressive ->
@@ -1290,7 +1324,7 @@ class DetailsViewModel @Inject constructor(
                     }
                     return@launch
                 } else {
-                    if (resolvedImdbId.isNullOrBlank()) {
+                    if (resolvedImdbId.isNullOrBlank() && !hasTmdbFallback) {
                         _uiState.value = _uiState.value.copy(
                             isLoadingStreams = false,
                             streams = emptyList(),
@@ -1299,13 +1333,14 @@ class DetailsViewModel @Inject constructor(
                         )
                         return@launch
                     }
+                    val tvStreamQueryId = resolvedImdbId ?: "tmdb:$requestMediaId"
                     // Look up air date for daily show stream resolution fallback
                     val episodeAirDate = _uiState.value.episodes
                         .firstOrNull { it.seasonNumber == (season ?: 1) && it.episodeNumber == (episode ?: 1) }
                         ?.airDate?.takeIf { it.isNotBlank() }
 
                     streamRepository.resolveEpisodeStreamsProgressive(
-                        imdbId = resolvedImdbId,
+                        imdbId = tvStreamQueryId,
                         season = season ?: 1,
                         episode = episode ?: 1,
                         tmdbId = currentMediaId,

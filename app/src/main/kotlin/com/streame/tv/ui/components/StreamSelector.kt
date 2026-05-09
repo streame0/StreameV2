@@ -469,9 +469,9 @@ fun StreamSelector(
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = if (!hasStreamingAddons)
-                                        "Go to Settings \u2192 Addons to add\na streaming addon"
+                                        "Let's get you started! Go to\nSettings \u2192 Addons to add a source"
                                     else
-                                        "Try adding more addons",
+                                        "This title might not be available yet.\nTry adding more addons in Settings",
                                     style = StreameTypography.caption.copy(fontSize = 12.sp),
                                     color = TextSecondary.copy(alpha = 0.6f),
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center

@@ -23,6 +23,8 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import com.streame.tv.data.sync.CloudSyncInvalidationBus
+import com.streame.tv.data.sync.CloudSyncScope
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,6 +51,9 @@ class WatchlistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val profileManager: ProfileManager,
     private val tmdbApi: TmdbApi,
+    private val librarySyncService: com.streame.tv.data.sync.LibrarySyncService,
+    private val authManager: com.streame.tv.data.repository.AuthManager,
+    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
 ) {
     private val gson = Gson()
 
@@ -142,6 +147,10 @@ class WatchlistRepository @Inject constructor(
             }
             cacheLoaded = true
         }
+
+        // Push to Supabase if authenticated
+        pushLibraryToRemote()
+        invalidationBus.markDirty(CloudSyncScope.WATCHLIST, reason = "addToWatchlist")
     }
 
     /**
@@ -166,6 +175,10 @@ class WatchlistRepository @Inject constructor(
             itemsCache.removeAll { it.id == tmdbId && it.mediaType == mediaType }
             _watchlistItems.value = itemsCache.toList()
         }
+
+        // Push to Supabase if authenticated
+        pushLibraryToRemote()
+        invalidationBus.markDirty(CloudSyncScope.WATCHLIST, reason = "removeFromWatchlist")
     }
 
     /**
@@ -437,6 +450,91 @@ class WatchlistRepository @Inject constructor(
             compareBy<MediaItem> { it.sourceOrder }
                 .thenByDescending { it.addedAt }
         )
+    }
+
+    /**
+     * Merge cloud library items into local watchlist.
+     * Cloud items not present locally are added; existing items keep the newer addedAt.
+     * After merge, the in-memory cache and StateFlow are refreshed.
+     */
+    suspend fun mergeFromCloud(cloudItems: List<com.streame.tv.data.remote.supabase.SupabaseLibraryItem>) {
+        if (cloudItems.isEmpty()) return
+        val localItems = loadWatchlistRaw().toMutableList()
+        val localKeys = localItems.map { "${it.mediaType}:${it.tmdbId}" }.toMutableSet()
+        var added = 0
+        cloudItems.forEach { cloud ->
+            val tmdbId = cloud.contentId.toIntOrNull() ?: return@forEach
+            val mediaType = cloud.contentType // "tv" or "movie"
+            val key = "$mediaType:$tmdbId"
+            if (!localKeys.contains(key)) {
+                localItems.add(
+                    LocalWatchlistItem(
+                        tmdbId = tmdbId,
+                        mediaType = mediaType,
+                        title = cloud.name,
+                        posterPath = cloud.poster,
+                        backdropPath = cloud.background,
+                        addedAt = if (cloud.addedAt > 0) cloud.addedAt else System.currentTimeMillis()
+                    )
+                )
+                localKeys.add(key)
+                added++
+            }
+        }
+        if (added > 0) {
+            saveWatchlist(localItems)
+            // Refresh in-memory cache
+            cacheMutex.withLock {
+                keyCache.clear()
+                localItems.forEach { item ->
+                    val type = if (item.mediaType == "tv") MediaType.TV else MediaType.MOVIE
+                    keyCache.add(cacheKey(type, item.tmdbId))
+                }
+                cacheLoaded = true
+                // Rebuild itemsCache from enriched data
+                val enriched = localItems.mapNotNull { item ->
+                    val type = if (item.mediaType == "tv") MediaType.TV else MediaType.MOVIE
+                    if (keyCache.contains(cacheKey(type, item.tmdbId))) item.toBasicMediaItem() else null
+                }
+                itemsCache.clear()
+                itemsCache.addAll(enriched)
+                _watchlistItems.value = itemsCache.toList()
+            }
+        }
+    }
+
+    /**
+     * Push current watchlist state to Supabase if authenticated.
+     * Fire-and-forget — failures are logged but don't block the user.
+     */
+    private suspend fun pushLibraryToRemote() {
+        if (!authManager.isAuthenticated) return
+        try {
+            val profileId = resolveProfileId()
+            val items = loadWatchlistRaw().map { local ->
+                com.streame.tv.data.remote.supabase.SupabaseLibraryItem(
+                    contentId = local.tmdbId.toString(),
+                    contentType = local.mediaType,
+                    name = local.title,
+                    poster = local.posterPath,
+                    posterShape = "POSTER",
+                    background = local.backdropPath,
+                    description = null,
+                    releaseInfo = null,
+                    imdbRating = null,
+                    profileId = profileId
+                )
+            }
+            librarySyncService.pushToRemote(items, profileId)
+        } catch (_: Exception) { }
+    }
+
+    private suspend fun resolveProfileId(): Int {
+        val activeId = profileManager.getProfileId()
+        if (activeId == "default") return 1
+        val profiles = profileManager.getProfileList()
+        val index = profiles.indexOfFirst { it.id == activeId }
+        return if (index >= 0) index + 1 else 1
     }
 
 }

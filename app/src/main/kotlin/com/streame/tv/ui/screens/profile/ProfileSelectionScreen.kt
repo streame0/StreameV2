@@ -73,7 +73,7 @@ import com.streame.tv.R
 fun ProfileSelectionScreen(
     viewModel: ProfileViewModel = hiltViewModel(),
     onProfileSelected: () -> Unit,
-    onShowAddProfile: () -> Unit
+    onShowAddProfile: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -277,6 +277,8 @@ fun ProfileSelectionScreen(
                     }
                 }
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             if (uiState.isSwitchingProfile) {
                 Spacer(modifier = Modifier.height(18.dp))

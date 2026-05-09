@@ -7,7 +7,6 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.streame.tv.BuildConfig
 import com.streame.tv.data.api.*
 import com.streame.tv.data.model.Addon
 import com.streame.tv.data.model.AddonInstallSource
@@ -82,7 +81,10 @@ class StreamRepository @Inject constructor(
     private val cloudstreamRepositoryService: CloudstreamRepositoryService,
     private val cloudstreamPluginInstaller: CloudstreamPluginInstaller,
     private val cloudstreamProviderRuntime: CloudstreamProviderRuntime,
-    private val httpLocalScraperRuntime: HttpLocalScraperRuntime
+    private val httpLocalScraperRuntime: HttpLocalScraperRuntime,
+    private val addonSyncService: com.streame.tv.data.sync.AddonSyncService,
+    private val authManager: com.streame.tv.data.repository.AuthManager,
+    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
 ) {
     companion object {
         const val SUPPORTED_CLOUDSTREAM_API_VERSION = 2
@@ -491,6 +493,8 @@ class StreamRepository @Inject constructor(
             addons.add(newAddon)
             saveAddons(addons)
 
+            pushAddonsToRemote()
+
             Result.success(newAddon)
         } catch (e: Exception) {
             Result.failure(e)
@@ -597,9 +601,6 @@ class StreamRepository @Inject constructor(
     }
 
     suspend fun addCloudstreamRepository(url: String): Result<Triple<String, CloudstreamRepositoryManifest, List<CloudstreamPluginIndexEntry>>> = withContext(Dispatchers.IO) {
-        if (!BuildConfig.CLOUDSTREAM_ENABLED) {
-            return@withContext Result.failure(IllegalStateException("Cloudstream support is only available in the sideload build"))
-        }
         try {
             val normalized = cloudstreamRepositoryService.normalizeRepositoryUrl(url)
             val manifest = cloudstreamRepositoryService.fetchRepositoryManifest(normalized)
@@ -630,9 +631,6 @@ class StreamRepository @Inject constructor(
         repositoryManifest: CloudstreamRepositoryManifest,
         plugin: CloudstreamPluginIndexEntry
     ): Result<Addon> = withContext(Dispatchers.IO) {
-        if (!BuildConfig.CLOUDSTREAM_ENABLED) {
-            return@withContext Result.failure(IllegalStateException("Cloudstream support is only available in the sideload build"))
-        }
         try {
             requireSupportedCloudstreamPluginApiVersion(plugin.apiVersion)
             val normalizedRepoUrl = cloudstreamRepositoryService.normalizeRepositoryUrl(repoUrl)
@@ -671,9 +669,6 @@ class StreamRepository @Inject constructor(
     }
 
     suspend fun refreshCloudstreamRepository(repoUrl: String): Result<Int> = withContext(Dispatchers.IO) {
-        if (!BuildConfig.CLOUDSTREAM_ENABLED) {
-            return@withContext Result.failure(IllegalStateException("Cloudstream support is only available in the sideload build"))
-        }
         try {
             val normalizedRepoUrl = cloudstreamRepositoryService.normalizeRepositoryUrl(repoUrl)
             val manifest = cloudstreamRepositoryService.fetchRepositoryManifest(normalizedRepoUrl)
@@ -794,6 +789,8 @@ class StreamRepository @Inject constructor(
         }
         val addons = current.filter { it.id != addonId }
         saveAddons(addons)
+
+        pushAddonsToRemote()
     }
 
     suspend fun removeCloudstreamRepository(repoUrl: String) {
@@ -885,6 +882,7 @@ class StreamRepository @Inject constructor(
             prefs.remove(pendingAddonsKey())
         }
         synchronized(streamResultCache) { streamResultCache.clear() }
+        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.ADDONS, reason = "saveAddons")
     }
 
     private fun sanitizeAddonDisplayName(addon: Addon): Addon {
@@ -3225,7 +3223,6 @@ class StreamRepository @Inject constructor(
             cachedQualityFilters.regexes.none { regex -> regex.containsMatchIn(qualityText) }
         }
     }
-}
 
     /**
      * Filter streams based on active quality regex filters.
@@ -3250,6 +3247,21 @@ class StreamRepository @Inject constructor(
             }
         }
     }
+
+    /**
+     * Push current addon URLs to Supabase if authenticated.
+     * Fire-and-forget — failures are logged but don't block the user.
+     */
+    private suspend fun pushAddonsToRemote() {
+        if (!authManager.isAuthenticated) return
+        try {
+            val urls = installedAddons.first()
+                .filter { it.runtimeKind == RuntimeKind.STREMIO }
+                .mapNotNull { it.url }
+            addonSyncService.pushToRemote(urls)
+        } catch (_: Exception) { }
+    }
+}
 
 /**
  * Addon configuration

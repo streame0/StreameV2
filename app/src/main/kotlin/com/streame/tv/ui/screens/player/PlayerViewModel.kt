@@ -474,9 +474,9 @@ class PlayerViewModel @Inject constructor(
 
                     val errorMessage = if (progressive.isFinal && mergedStreams.isEmpty()) {
                         if (streamingAddonCount == 0) {
-                            "No streaming addons configured.\n\nGo to Settings \u2192 Addons to add a streaming addon, then come back and try again."
+                            "No streaming addons installed yet.\n\nGo to Settings \u2192 Addons to add your first source, then try again."
                         } else {
-                            "No streams found for this content. The addons may not have sources for this title."
+                            "No sources found for this title.\n\nTry adding more addons in Settings, or check your internet connection."
                         }
                     } else null
 

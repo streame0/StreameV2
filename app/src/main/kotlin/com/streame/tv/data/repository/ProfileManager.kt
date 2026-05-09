@@ -162,4 +162,11 @@ class ProfileManager @Inject constructor(
      * Check if this is the default profile (no user profile selected)
      */
     fun isDefaultProfile(): Boolean = getProfileIdSync() == DEFAULT_PROFILE_ID
+
+    /**
+     * Get the list of all local profiles (for sync profile-id mapping).
+     */
+    suspend fun getProfileList(): List<com.streame.tv.data.model.Profile> {
+        return profileRepository.getProfiles()
+    }
 }

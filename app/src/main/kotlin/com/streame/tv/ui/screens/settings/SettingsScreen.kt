@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.SwitchAccount
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.activity.compose.BackHandler
@@ -232,7 +233,8 @@ fun SettingsScreen(
     onNavigateToSearch: () -> Unit = {},
     onNavigateToWatchlist: () -> Unit = {},
     onSwitchProfile: () -> Unit = {},
-    onBack: () -> Unit = {}
+    onBack: () -> Unit = {},
+    navController: androidx.navigation.NavHostController = androidx.navigation.compose.rememberNavController()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val isTouchDevice = LocalDeviceType.current.isTouchDevice()
@@ -308,7 +310,7 @@ fun SettingsScreen(
             "stremio" -> stremioAddons.size // rows + add button
             "torrserver" -> 4 // URL + Auto-detect + Test + Status
             "cloudstream" -> cloudstreamPlugins.size + uiState.cloudstreamRepositories.size // plugins + repos + add button
-            "accounts" -> 3 // Cloud + Trakt + Force Sync + App Update
+            "accounts" -> if (uiState.isSupabaseAuthenticated) 4 else 3 // Supabase + Trakt + App Update (+ Force Sync when authenticated)
             else -> 0
         }
     }
@@ -753,6 +755,14 @@ fun SettingsScreen(
                                         "accounts" -> {
                                             when (contentFocusIndex) {
                                                 0 -> {
+                                                    if (uiState.isSupabaseAuthenticated) {
+                                                        viewModel.disconnectSupabase()
+                                                    } else {
+                                                        val target = if (isTouchDevice) com.streame.tv.navigation.Screen.SupabaseEmailLogin.route else com.streame.tv.navigation.Screen.SupabaseQrLogin.route
+                                                        navController.navigate(target)
+                                                    }
+                                                }
+                                                1 -> {
                                                     if (uiState.isTraktAuthenticated) {
                                                         viewModel.disconnectTrakt()
                                                     } else if (uiState.isTraktPolling) {
@@ -761,12 +771,15 @@ fun SettingsScreen(
                                                         viewModel.startTraktAuth()
                                                     }
                                                 }
-                                                1 -> {
+                                                2 -> {
                                                     if (uiState.downloadedApkPath != null) {
                                                         viewModel.installAppUpdateOrRequestPermission()
                                                     } else {
                                                         viewModel.checkForAppUpdates(force = true, showNoUpdateFeedback = true)
                                                     }
+                                                }
+                                                3 -> {
+                                                    viewModel.forceSync()
                                                 }
                                             }
                                         }
@@ -805,7 +818,8 @@ fun SettingsScreen(
                     showCatalogRename = true
                 },
                 onAddCustomAddonClick = { showCustomAddonInput = true },
-                onAddCloudstreamRepoClick = { showCloudstreamRepoInput = true }
+                onAddCloudstreamRepoClick = { showCloudstreamRepoInput = true },
+                onConnectSupabase = { navController.navigate(com.streame.tv.navigation.Screen.SupabaseEmailLogin.route) }
             )
         } else {
             AppTopBar(
@@ -987,7 +1001,8 @@ fun SettingsScreen(
                             traktUrl = uiState.traktCode?.verificationUrl,
                             isTraktAuthStarting = uiState.isTraktAuthStarting,
                             isTraktPolling = uiState.isTraktPolling,
-                            isSelfUpdateSupported = uiState.isSelfUpdateSupported,
+                            isSupabaseAuthenticated = uiState.isSupabaseAuthenticated,
+                            supabaseEmail = uiState.supabaseEmail,
                             isCheckingForUpdate = uiState.isCheckingForUpdate,
                             isAppUpdateAvailable = uiState.isAppUpdateAvailable,
                             availableAppUpdate = uiState.availableAppUpdate,
@@ -996,6 +1011,11 @@ fun SettingsScreen(
                             onConnectTrakt = { viewModel.startTraktAuth() },
                             onCancelTrakt = { viewModel.cancelTraktAuth() },
                             onDisconnectTrakt = { viewModel.disconnectTrakt() },
+                            onConnectSupabaseQr = { navController.navigate(com.streame.tv.navigation.Screen.SupabaseQrLogin.route) },
+                            onConnectSupabaseEmail = { navController.navigate(com.streame.tv.navigation.Screen.SupabaseEmailLogin.route) },
+                            onDisconnectSupabase = { viewModel.disconnectSupabase() },
+                            onForceSync = { viewModel.forceSync() },
+                            onDeleteAccount = { viewModel.deleteSupabaseAccount() },
                             onSwitchProfile = onSwitchProfile,
                             onCheckUpdates = { viewModel.checkForAppUpdates(force = true, showNoUpdateFeedback = true) },
                             onInstallUpdate = { viewModel.installAppUpdateOrRequestPermission() }
@@ -1243,7 +1263,6 @@ fun SettingsScreen(
                 progress = uiState.appUpdateDownloadProgress,
                 errorMessage = uiState.appUpdateError,
                 downloadedApkPath = uiState.downloadedApkPath,
-                isSelfUpdateSupported = uiState.isSelfUpdateSupported,
                 onDismiss = { viewModel.dismissAppUpdateDialog() },
                 onIgnore = { viewModel.ignoreAppUpdate() },
                 onDownload = { viewModel.downloadAppUpdate() },
@@ -1795,7 +1814,8 @@ private fun MobileSettingsLayout(
     onAddCatalogClick: () -> Unit,
     onRenameCatalogClick: (CatalogConfig) -> Unit,
     onAddCustomAddonClick: () -> Unit,
-    onAddCloudstreamRepoClick: () -> Unit
+    onAddCloudstreamRepoClick: () -> Unit,
+    onConnectSupabase: () -> Unit
 ) {
     BackHandler(enabled = page != "MAIN") {
         onNavigate("MAIN")
@@ -1828,7 +1848,8 @@ private fun MobileSettingsLayout(
                 openSubtitlePicker = openSubtitlePicker,
                 openSecondarySubtitlePicker = openSecondarySubtitlePicker,
                 openAudioLanguagePicker = openAudioLanguagePicker,
-                onSwitchProfile = onSwitchProfile
+                onSwitchProfile = onSwitchProfile,
+                onConnectSupabase = onConnectSupabase
             )
         } else {
             Row(
@@ -1880,7 +1901,8 @@ private fun MobileSettingsMainPage(
     openSubtitlePicker: () -> Unit,
     openSecondarySubtitlePicker: () -> Unit = {},
     openAudioLanguagePicker: () -> Unit,
-    onSwitchProfile: () -> Unit
+    onSwitchProfile: () -> Unit,
+    onConnectSupabase: () -> Unit
 ) {
     androidx.compose.foundation.lazy.LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1968,6 +1990,29 @@ private fun MobileSettingsMainPage(
                     isFocused = false,
                     onClick = onSwitchProfile
                 )
+                MobileSettingsRow(
+                    icon = Icons.Default.Cloud,
+                    title = "Cloud Connect",
+                    value = if (uiState.isSupabaseAuthenticated) "Connected" else "Connect",
+                    isFocused = false,
+                    onClick = { if (uiState.isSupabaseAuthenticated) viewModel.disconnectSupabase() else onConnectSupabase() }
+                )
+                if (uiState.isSupabaseAuthenticated) {
+                    MobileSettingsRow(
+                        icon = Icons.Default.Sync,
+                        title = "Force Cloud Sync",
+                        value = "Sync Now",
+                        isFocused = false,
+                        onClick = { viewModel.forceSync() }
+                    )
+                    MobileSettingsRow(
+                        icon = Icons.Default.Delete,
+                        title = "Delete Account",
+                        value = "Permanent",
+                        isFocused = false,
+                        onClick = { viewModel.deleteSupabaseAccount() }
+                    )
+                }
                 MobileSettingsRow(
                     icon = Icons.Default.Movie,
                     title = stringResource(R.string.trakt_account),
@@ -2296,7 +2341,6 @@ private fun AppUpdateModal(
     progress: Float?,
     errorMessage: String?,
     downloadedApkPath: String?,
-    isSelfUpdateSupported: Boolean,
     onDismiss: () -> Unit,
     onIgnore: () -> Unit,
     onDownload: () -> Unit,
@@ -2359,7 +2403,6 @@ private fun AppUpdateModal(
             Spacer(modifier = Modifier.height(10.dp))
 
             val subtitle = when {
-                !isSelfUpdateSupported -> "This install is managed by the Play Store."
                 downloadedApkPath != null && update != null -> "${update.title} is ready to install."
                 isAppUpdateAvailable && update != null -> "Update available: ${update.title} (${update.tag})"
                 update != null -> "You already have the latest version installed."
@@ -2432,7 +2475,7 @@ private fun AppUpdateModal(
                     focusedIndex == 2,
                     if (downloadedApkPath != null) onInstall else onDownload,
                     highlighted = true,
-                    enabled = isSelfUpdateSupported && !isChecking && primaryEnabled
+                    enabled = !isChecking && primaryEnabled
                 )
             }
         }
@@ -5258,7 +5301,8 @@ private fun AccountsSettings(
     traktUrl: String?,
     isTraktAuthStarting: Boolean,
     isTraktPolling: Boolean,
-    isSelfUpdateSupported: Boolean,
+    isSupabaseAuthenticated: Boolean,
+    supabaseEmail: String?,
     isCheckingForUpdate: Boolean,
     isAppUpdateAvailable: Boolean,
     availableAppUpdate: com.streame.tv.updater.AppUpdate?,
@@ -5267,6 +5311,11 @@ private fun AccountsSettings(
     onConnectTrakt: () -> Unit,
     onCancelTrakt: () -> Unit,
     onDisconnectTrakt: () -> Unit,
+    onConnectSupabaseQr: () -> Unit,
+    onConnectSupabaseEmail: () -> Unit,
+    onDisconnectSupabase: () -> Unit,
+    onForceSync: () -> Unit,
+    onDeleteAccount: () -> Unit,
     onSwitchProfile: () -> Unit,
     onCheckUpdates: () -> Unit,
     onInstallUpdate: () -> Unit
@@ -5279,6 +5328,23 @@ private fun AccountsSettings(
             modifier = Modifier.padding(bottom = 24.dp)
         )
 
+        // Supabase Cloud Sync
+        AccountRow(
+            name = "Cloud Connect",
+            description = if (isSupabaseAuthenticated) "Signed in as ${supabaseEmail ?: "unknown"}" else "Sync addons, watchlist & progress across devices",
+            isConnected = isSupabaseAuthenticated,
+            isWorking = false,
+            authCode = null,
+            authUrl = null,
+            isFocused = focusedIndex == 0,
+            onConnect = if (LocalDeviceType.current.isTouchDevice()) onConnectSupabaseEmail else onConnectSupabaseQr,
+            onDisconnect = onDisconnectSupabase,
+            modifier = Modifier.settingsFocusSlot(0),
+            expirationText = null
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Trakt.tv
         AccountRow(
             name = "Trakt.tv",
@@ -5287,10 +5353,10 @@ private fun AccountsSettings(
             isWorking = isTraktAuthStarting || isTraktPolling,
             authCode = traktCode,
             authUrl = traktUrl,
-            isFocused = focusedIndex == 0,
+            isFocused = focusedIndex == 1,
             onConnect = { if (isTraktPolling) onCancelTrakt() else onConnectTrakt() },
             onDisconnect = onDisconnectTrakt,
-            modifier = Modifier.settingsFocusSlot(0),
+            modifier = Modifier.settingsFocusSlot(1),
             expirationText = null  // Don't show expiration - Trakt tokens auto-refresh
         )
 
@@ -5299,7 +5365,6 @@ private fun AccountsSettings(
         SettingsActionRow(
             title = stringResource(R.string.app_update),
             description = when {
-                !isSelfUpdateSupported -> "This install is managed by the Play Store"
                 downloadedApkPath != null -> "Latest update downloaded and ready to install"
                 isCheckingForUpdate -> "Checking GitHub Releases for a newer APK"
                 isAppUpdateAvailable -> "Update available: ${availableAppUpdate?.title ?: availableAppUpdate?.tag ?: "latest release"}"
@@ -5307,18 +5372,45 @@ private fun AccountsSettings(
                 else -> "Check GitHub Releases for the latest Streame APK"
             },
             actionLabel = when {
-                !isSelfUpdateSupported -> "PLAY"
                 downloadedApkPath != null -> "INSTALL"
                 isCheckingForUpdate -> "CHECKING"
                 isAppUpdateAvailable -> "UPDATE"
                 else -> "CHECK"
             },
-            isFocused = focusedIndex == 1,
+            isFocused = focusedIndex == 2,
             onClick = {
                 if (downloadedApkPath != null) onInstallUpdate() else onCheckUpdates()
             },
-            modifier = Modifier.settingsFocusSlot(1)
+            icon = Icons.Default.SystemUpdate,
+            modifier = Modifier.settingsFocusSlot(2)
         )
+
+        if (isSupabaseAuthenticated) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            SettingsActionRow(
+                title = "Force Cloud Sync",
+                description = "Pull latest data from all synced devices",
+                actionLabel = "SYNC",
+                isFocused = focusedIndex == 3,
+                onClick = onForceSync,
+                icon = Icons.Default.Sync,
+                modifier = Modifier.settingsFocusSlot(3)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            SettingsActionRow(
+                title = "Delete Account",
+                description = "Permanently delete your account and all synced data",
+                actionLabel = "DELETE",
+                isFocused = focusedIndex == 4,
+                onClick = onDeleteAccount,
+                icon = Icons.Default.Delete,
+                modifier = Modifier.settingsFocusSlot(4),
+                actionColor = Color(0xFFFF6E6E)
+            )
+        }
     }
 }
 
@@ -5397,7 +5489,9 @@ private fun SettingsActionRow(
     actionLabel: String,
     isFocused: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    actionColor: Color = Pink,
+    icon: ImageVector = Icons.Default.Person
 ) {
     Row(
         modifier = modifier
@@ -5437,22 +5531,22 @@ private fun SettingsActionRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .background(
-                    Pink.copy(alpha = 0.2f),
+                    actionColor.copy(alpha = 0.2f),
                     RoundedCornerShape(8.dp)
                 )
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
             Icon(
-                imageVector = Icons.Default.Person,
+                imageVector = icon,
                 contentDescription = null,
-                tint = Pink,
+                tint = actionColor,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = actionLabel.uppercase(),
                 style = StreameTypography.label,
-                color = Pink
+                color = actionColor
             )
         }
     }

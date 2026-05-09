@@ -2,7 +2,6 @@ package com.streame.tv.ui.screens.settings
 
 import android.content.Context
 import coil.Coil
-import com.streame.tv.BuildConfig
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -58,6 +57,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -108,7 +108,6 @@ data class SettingsUiState(
     val syncedMovies: Int = 0,
     val syncedEpisodes: Int = 0,
     // App updates
-    val isSelfUpdateSupported: Boolean = true,
     val isCheckingForUpdate: Boolean = false,
     val availableAppUpdate: AppUpdate? = null,
     val isAppUpdateAvailable: Boolean = false,
@@ -130,7 +129,7 @@ data class SettingsUiState(
     val pendingCloudstreamManifest: CloudstreamRepositoryManifest? = null,
     val pendingCloudstreamRepoUrl: String? = null,
     val pendingCloudstreamPlugins: List<CloudstreamPluginIndexEntry> = emptyList(),
-    val cloudstreamEnabled: Boolean = BuildConfig.CLOUDSTREAM_ENABLED,
+    val cloudstreamEnabled: Boolean = true,
     val cloudstreamSupportedApiVersion: Int = StreamRepository.SUPPORTED_CLOUDSTREAM_API_VERSION,
     val torrServerBaseUrl: String = "",
     val torrServerStatus: TorrServerStatus = TorrServerStatus.UNKNOWN,
@@ -145,7 +144,10 @@ data class SettingsUiState(
     val qualityFilterPresetLabel: String = "OFF",
     // Toast
     val toastMessage: String? = null,
-    val toastType: ToastType = ToastType.INFO
+    val toastType: ToastType = ToastType.INFO,
+    // Supabase
+    val isSupabaseAuthenticated: Boolean = false,
+    val supabaseEmail: String? = null
 )
 
 @HiltViewModel
@@ -164,7 +166,11 @@ class SettingsViewModel @Inject constructor(
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
     private val appUpdateRepository: AppUpdateRepository,
     private val updatePreferences: UpdatePreferences,
-    private val apkDownloader: ApkDownloader
+    private val apkDownloader: ApkDownloader,
+    private val authManager: com.streame.tv.data.repository.AuthManager,
+    private val profileSettingsSyncService: com.streame.tv.data.sync.ProfileSettingsSyncService,
+    private val startupSyncService: com.streame.tv.data.sync.StartupSyncService,
+    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
 ) : ViewModel() {
     private fun visibleCatalogs(catalogs: List<CatalogConfig>): List<CatalogConfig> {
         return catalogs.filter { config ->
@@ -179,6 +185,76 @@ class SettingsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+
+    init {
+        observeSupabaseAuth()
+    }
+
+    private fun observeSupabaseAuth() {
+        viewModelScope.launch {
+            authManager.authState.collect { state ->
+                val isAuthenticated = state is com.streame.tv.data.repository.SupabaseAuthState.FullAccount
+                val email = (state as? com.streame.tv.data.repository.SupabaseAuthState.FullAccount)?.email
+                _uiState.update { it.copy(isSupabaseAuthenticated = isAuthenticated, supabaseEmail = email) }
+            }
+        }
+    }
+
+    fun disconnectSupabase() {
+        viewModelScope.launch {
+            // Clear the cloud link from the current profile before signing out
+            val activeProfileId = profileManager.getProfileIdSync()
+            if (activeProfileId != "default") {
+                profileRepository.clearCloudLink(activeProfileId)
+            }
+            authManager.signOut()
+        }
+    }
+
+    fun deleteSupabaseAccount() {
+        viewModelScope.launch {
+            val result = authManager.deleteAccount()
+            if (result.isFailure) {
+                _uiState.update { it.copy(toastMessage = result.exceptionOrNull()?.message ?: "Failed to delete account", toastType = ToastType.ERROR) }
+            }
+        }
+    }
+
+    fun forceSync() {
+        viewModelScope.launch { startupSyncService.pullAllData() }
+    }
+
+    /**
+     * Push current profile settings to Supabase if authenticated.
+     * Called after any settings change — fire-and-forget.
+     */
+    private fun pushProfileSettingsToRemote() {
+        viewModelScope.launch {
+            if (!authManager.isAuthenticated) return@launch
+            try {
+                val prefs = context.settingsDataStore.data.first()
+                val jsonMap = prefs.asMap().mapKeys { (key, _) -> key.name }
+                val jsonStr = gson.toJson(jsonMap)
+                val jsonElement = kotlinx.serialization.json.Json.parseToJsonElement(jsonStr)
+                if (jsonElement is kotlinx.serialization.json.JsonObject) {
+                    val profileId = resolveProfileId()
+                    profileSettingsSyncService.pushToRemote(profileId = profileId, settingsJson = jsonElement)
+                }
+            } catch (_: Exception) { }
+            invalidationBus.markDirty(
+                com.streame.tv.data.sync.CloudSyncScope.PROFILE_SETTINGS,
+                reason = "settingsChanged"
+            )
+        }
+    }
+
+    private suspend fun resolveProfileId(): Int {
+        val activeId = profileManager.getProfileId()
+        if (activeId == "default") return 1
+        val profiles = profileManager.getProfileList()
+        val index = profiles.indexOfFirst { it.id == activeId }
+        return if (index >= 0) index + 1 else 1
+    }
 
     private fun contentLanguageKey() = profileManager.profileStringKey("content_language")
 
@@ -271,9 +347,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     private fun initializeUpdaterState() {
-        _uiState.value = _uiState.value.copy(
-            isSelfUpdateSupported = appUpdateRepository.supportsSelfUpdate()
-        )
         // If the app was updated to a new version, clear any previously ignored tag
         // so future updates are shown again.
         viewModelScope.launch {
@@ -555,6 +628,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[defaultSubtitleKey()] = language
                 prefs[subtitleSettingsUpdatedAtKey()] = changedAt.toString()
             }
+            pushProfileSettingsToRemote()
             _uiState.value = _uiState.value.copy(
                 defaultSubtitle = language,
                 subtitleOptions = loadSubtitleOptions(language)
@@ -570,6 +644,7 @@ class SettingsViewModel @Inject constructor(
             context.settingsDataStore.edit { prefs ->
                 prefs[defaultAudioLanguageKey()] = language
             }
+            pushProfileSettingsToRemote()
             _uiState.value = _uiState.value.copy(
                 defaultAudioLanguage = language,
                 audioLanguageOptions = loadAudioLanguageOptions(language)
@@ -709,6 +784,7 @@ class SettingsViewModel @Inject constructor(
             context.settingsDataStore.edit { prefs ->
                 prefs[autoPlayNextKey()] = enabled
             }
+            pushProfileSettingsToRemote()
             _uiState.value = _uiState.value.copy(autoPlayNext = enabled)
 
             // Sync to cloud
@@ -790,6 +866,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[contentLanguageKey()] = lang
                 prefs[LAST_APP_LANGUAGE_KEY] = lang
             }
+            pushProfileSettingsToRemote()
             // Mirror to SharedPreferences so attachBaseContext can read it synchronously on next launch
             context.getSharedPreferences("app_locale", android.content.Context.MODE_PRIVATE)
                 .edit().putString("locale_tag", lang).apply()
@@ -1463,14 +1540,6 @@ class SettingsViewModel @Inject constructor(
 
 
     fun checkForAppUpdates(force: Boolean, showNoUpdateFeedback: Boolean) {
-        if (!appUpdateRepository.supportsSelfUpdate()) {
-            _uiState.value = _uiState.value.copy(
-                isSelfUpdateSupported = false,
-                showAppUpdateDialog = force,
-                appUpdateError = if (force) "This install is managed by the Play Store." else null
-            )
-            return
-        }
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
@@ -1529,13 +1598,6 @@ class SettingsViewModel @Inject constructor(
 
     fun downloadAppUpdate() {
         val update = _uiState.value.availableAppUpdate ?: return
-        if (!appUpdateRepository.supportsSelfUpdate()) {
-            _uiState.value = _uiState.value.copy(
-                toastMessage = "This install is managed by the Play Store.",
-                toastType = ToastType.INFO
-            )
-            return
-        }
         if (!_uiState.value.isAppUpdateAvailable) {
             _uiState.value = _uiState.value.copy(
                 toastMessage = "You already have the latest version",

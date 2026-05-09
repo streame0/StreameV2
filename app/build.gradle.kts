@@ -9,6 +9,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.dagger.hilt.android")
+    id("org.jetbrains.kotlin.plugin.serialization")
     id("androidx.baselineprofile")
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
     id("io.gitlab.arturbosch.detekt")
@@ -33,13 +34,15 @@ android {
         // Force Hilt Application classes into the primary DEX so they're
         // available during the very first moments of process startup.
         multiDexKeepProguard = file("multidex-config.pro")
-        versionCode = 1
-        versionName = "1.1"
+        versionCode = 2
+        versionName = "1.2"
         buildConfigField("String", "GITHUB_OWNER", "\"streame0\"")
         buildConfigField("String", "GITHUB_REPO", "\"StreameV2\"")
+        buildConfigField("String", "SUPABASE_URL", "\"${localSecretValue("SUPABASE_URL")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localSecretValue("SUPABASE_ANON_KEY")}\"")
+        buildConfigField("String", "TV_LOGIN_WEB_BASE_URL", "\"${localSecretValue("TV_LOGIN_WEB_BASE_URL")}\"")
 
-
-        // Support both 32-bit and 64-bit devices (required for Google Play since 2019)
+        // Support both 32-bit and 64-bit devices
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
@@ -53,15 +56,8 @@ android {
     }
 
     productFlavors {
-        create("play") {
-            dimension = "distribution"
-            buildConfigField("Boolean", "SELF_UPDATE_ENABLED", "false")
-            buildConfigField("Boolean", "CLOUDSTREAM_ENABLED", "false")
-        }
         create("sideload") {
             dimension = "distribution"
-            buildConfigField("Boolean", "SELF_UPDATE_ENABLED", "true")
-            buildConfigField("Boolean", "CLOUDSTREAM_ENABLED", "true")
         }
     }
 
@@ -246,10 +242,7 @@ dependencies {
     implementation("androidx.media3:media3-session:$media3Version")
     implementation("androidx.media3:media3-common:$media3Version")
     // FFmpeg extension for software decoding of DTS/TrueHD/Atmos/HEVC/DV.
-    // Keep this only in the sideload build. The Play Store build must comply
-    // with 16 KB memory page support, and the current prebuilt native library
-    // (libffmpegJNI.so) is the likely source of the Play Console warning.
-    add("sideloadImplementation", "org.jellyfin.media3:media3-ffmpeg-decoder:1.3.1+2")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.3.1+2")
 
     // Networking - Retrofit + OkHttp
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
@@ -313,6 +306,14 @@ dependencies {
     // Sentry crash reporting. Runtime initialization is gated by BuildConfig.ENABLE_CRASH_REPORTING
     // and SENTRY_DSN from secrets.properties/secrets.defaults.properties.
     implementation("io.sentry:sentry-android:8.40.0")
+
+    // Supabase — cloud sync + auth
+    implementation(platform("io.github.jan-tennert.supabase:bom:3.1.4"))
+    implementation("io.github.jan-tennert.supabase:auth-kt")
+    implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("io.ktor:ktor-client-okhttp:3.1.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("com.russhwolf:multiplatform-settings:1.3.0")
 
     baselineProfile(project(":benchmark"))
 

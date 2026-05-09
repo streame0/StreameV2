@@ -23,6 +23,8 @@ import com.streame.tv.data.repository.AuthState
 import com.streame.tv.ui.screens.details.DetailsScreen
 import com.streame.tv.ui.screens.home.HomeScreen
 import com.streame.tv.ui.screens.login.LoginScreen
+import com.streame.tv.ui.screens.account.AuthQrSignInScreen
+import com.streame.tv.ui.screens.account.AuthEmailSignInScreen
 import com.streame.tv.ui.screens.player.PlayerScreen
 import com.streame.tv.ui.screens.collections.CollectionDetailsScreen
 import com.streame.tv.ui.screens.search.SearchScreen
@@ -46,6 +48,8 @@ sealed class Screen(val route: String) {
     }
     object Settings : Screen("settings")
     object ProfileSelection : Screen("profile_selection")
+    object SupabaseQrLogin : Screen("supabase_qr_login")
+    object SupabaseEmailLogin : Screen("supabase_email_login")
     
     object Details : Screen("details/{mediaType}/{mediaId}?initialSeason={initialSeason}&initialEpisode={initialEpisode}") {
         fun createRoute(
@@ -137,12 +141,39 @@ fun AppNavigation(
         popEnterTransition = { fadeIn(androidx.compose.animation.core.tween(250)) },
         popExitTransition = { fadeOut(androidx.compose.animation.core.tween(200)) }
     ) {
-        // Login screen
+        // Login screen (Trakt)
         composable(Screen.Login.route) {
             LoginScreen(
                 onLoginSuccess = {
                     navController.navigate(Screen.Home.route) {
                         popUpTo(Screen.Login.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // Supabase QR sign-in
+        composable(Screen.SupabaseQrLogin.route) {
+            AuthQrSignInScreen(
+                onBackPress = { navController.popBackStack() },
+                onContinue = {
+                    navController.navigate(Screen.Home.route) {
+                        popUpTo(Screen.SupabaseQrLogin.route) { inclusive = true }
+                    }
+                },
+                onEmailSignIn = {
+                    navController.navigate(Screen.SupabaseEmailLogin.route)
+                }
+            )
+        }
+
+        // Supabase email/password sign-in
+        composable(Screen.SupabaseEmailLogin.route) {
+            AuthEmailSignInScreen(
+                onBackPress = { navController.popBackStack() },
+                onSignInSuccess = {
+                    navController.navigate(Screen.Home.route) {
+                        popUpTo(Screen.SupabaseEmailLogin.route) { inclusive = true }
                     }
                 }
             )
@@ -236,12 +267,14 @@ fun AppNavigation(
                         popUpTo(Screen.Home.route) { inclusive = true }
                     }
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                navController = navController
             )
         }
 
         // Profile selection screen
         composable(Screen.ProfileSelection.route) {
+            val isTouchDevice = com.streame.tv.util.LocalDeviceType.current.isTouchDevice()
             ProfileSelectionScreen(
                 onProfileSelected = {
                     navController.navigate(Screen.Home.route) {
