@@ -50,7 +50,11 @@ data class MediaItem(
     // Explicit source order when a remote list already gives the correct order.
     val sourceOrder: Int = Int.MAX_VALUE,
     // Placeholder card - shows skeleton loading animation
-    val isPlaceholder: Boolean = false
+    val isPlaceholder: Boolean = false,
+    // Last-played source info for same-source resume
+    val lastAddonId: String? = null,
+    val lastSourceName: String? = null,
+    val lastBingeGroup: String? = null
 ) : Serializable
 
 enum class MediaType {

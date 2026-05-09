@@ -1428,7 +1428,10 @@ class PlayerViewModel @Inject constructor(
                     episodeTitle = currentEpisodeTitle,
                     progress = progressFraction,
                     duration = durationSeconds,
-                    position = positionSeconds
+                    position = positionSeconds,
+                    lastAddonId = _uiState.value.selectedStream?.addonId?.trim()?.takeIf { it.isNotBlank() },
+                    lastSourceName = _uiState.value.selectedStream?.source?.trim()?.takeIf { it.isNotBlank() },
+                    lastBingeGroup = _uiState.value.selectedStream?.behaviorHints?.bingeGroup?.trim()?.takeIf { it.isNotBlank() }
                 )
 
                 // Also save to local Continue Watching (profile-scoped, for profiles without Trakt).
@@ -1447,7 +1450,10 @@ class PlayerViewModel @Inject constructor(
                         episodeTitle = currentEpisodeTitle,
                         progress = progressPercent,
                         positionSeconds = positionSeconds,
-                        durationSeconds = durationSeconds
+                        durationSeconds = durationSeconds,
+                        lastAddonId = _uiState.value.selectedStream?.addonId?.trim()?.takeIf { it.isNotBlank() },
+                        lastSourceName = _uiState.value.selectedStream?.source?.trim()?.takeIf { it.isNotBlank() },
+                        lastBingeGroup = _uiState.value.selectedStream?.behaviorHints?.bingeGroup?.trim()?.takeIf { it.isNotBlank() }
                     )
                 }
 

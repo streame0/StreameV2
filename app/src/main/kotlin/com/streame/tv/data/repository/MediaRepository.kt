@@ -2555,13 +2555,21 @@ class MediaRepository @Inject constructor(
      */
     suspend fun getLogoUrl(mediaType: MediaType, mediaId: Int): String? {
         val cacheKey = "${mediaType}_logo_$mediaId"
+        android.util.Log.d("LogoDebug", "getLogoUrl called: $mediaType/$mediaId")
         if (logoCache.containsKey(cacheKey)) {
-            getFromCache(logoCache, cacheKey)?.let { return it }
+            val cached = getFromCache(logoCache, cacheKey)
+            if (cached != null) {
+                android.util.Log.d("LogoDebug", "getLogoUrl cache hit: $mediaType/$mediaId -> $cached")
+                return cached
+            }
+            android.util.Log.d("LogoDebug", "getLogoUrl cache stale/null: $mediaType/$mediaId, re-fetching")
         }
 
         val type = if (mediaType == MediaType.TV) "tv" else "movie"
         return try {
             val images = tmdbApi.getImages(type, mediaId)
+            val totalLogos = images.logos.size
+            val nonSvgLogos = images.logos.count { !it.filePath.isNullOrBlank() && !it.filePath!!.endsWith(".svg", ignoreCase = true) }
             // Quality ranking for clearlogos: prefer PNG over SVG (the app has
             // no SVG decoder), English over other locales, and among the
             // survivors pick the highest community-rated logo (vote_average
@@ -2576,11 +2584,19 @@ class MediaRepository @Inject constructor(
                         .thenByDescending { it.width }
                 )
                 .firstOrNull()
-                ?: images.logos.firstOrNull()
-            val url = logo?.filePath?.let { "${Constants.LOGO_BASE}$it" }
+            val url = logo
+                ?.filePath
+                ?.takeIf { it.isNotBlank() && !it.endsWith(".svg", ignoreCase = true) }
+                ?.let { "${Constants.LOGO_BASE}$it" }
+            if (url == null) {
+                android.util.Log.d("LogoDebug", "No logo for $type/$mediaId (total=$totalLogos, nonSvg=$nonSvgLogos)")
+            } else {
+                android.util.Log.d("LogoDebug", "Logo found for $type/$mediaId: $url (total=$totalLogos, nonSvg=$nonSvgLogos)")
+            }
             logoCache[cacheKey] = CacheEntry(url, System.currentTimeMillis())
             url
         } catch (e: Exception) {
+            android.util.Log.d("LogoDebug", "Logo fetch failed for $type/$mediaId: ${e.message}")
             null
         }
     }

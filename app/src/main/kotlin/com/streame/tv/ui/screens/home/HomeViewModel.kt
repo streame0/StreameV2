@@ -218,22 +218,39 @@ class HomeViewModel @Inject constructor(
         localItems: List<ContinueWatchingItem>,
         historyItems: List<ContinueWatchingItem>
     ): List<ContinueWatchingItem> {
-        val localByKey = (localItems + historyItems).associateBy { "${it.mediaType}:${it.id}" }
-        return traktItems.map { traktItem ->
-            val key = "${traktItem.mediaType}:${traktItem.id}"
+        val allLocal = localItems + historyItems
+        val localByKey = allLocal.associateBy { "${it.mediaType}:${it.id}:${it.season ?: -1}:${it.episode ?: -1}" }
+        val traktKeys = traktItems.map { "${it.mediaType}:${it.id}:${it.season ?: -1}:${it.episode ?: -1}" }.toSet()
+
+        // Merge Trakt items with matching local data
+        val merged = traktItems.map { traktItem ->
+            val key = "${traktItem.mediaType}:${traktItem.id}:${traktItem.season ?: -1}:${traktItem.episode ?: -1}"
             val local = localByKey[key]
-            if (local != null && local.season == traktItem.season && local.episode == traktItem.episode) {
+            if (local != null) {
                 traktItem.copy(
                     resumePositionSeconds = maxOf(traktItem.resumePositionSeconds, local.resumePositionSeconds),
                     durationSeconds = maxOf(traktItem.durationSeconds, local.durationSeconds),
                     episodeTitle = traktItem.episodeTitle ?: local.episodeTitle,
                     backdropPath = traktItem.backdropPath ?: local.backdropPath,
-                    posterPath = traktItem.posterPath ?: local.posterPath
+                    posterPath = traktItem.posterPath ?: local.posterPath,
+                    lastAddonId = traktItem.lastAddonId ?: local.lastAddonId,
+                    lastSourceName = traktItem.lastSourceName ?: local.lastSourceName,
+                    lastBingeGroup = traktItem.lastBingeGroup ?: local.lastBingeGroup
                 )
             } else {
                 traktItem
             }
         }
+
+        // Include local-only items not yet in Trakt (e.g. just watched, hasn't synced)
+        val localOnly = allLocal.filter { item ->
+            val key = "${item.mediaType}:${item.id}:${item.season ?: -1}:${item.episode ?: -1}"
+            key !in traktKeys && item.progress in 1..99
+        }
+
+        return (merged + localOnly)
+            .distinctBy { "${it.mediaType}:${it.id}" }
+            .sortedByDescending { it.updatedAtMs ?: 0L }
     }
 
     private fun isActionableMediaItem(item: MediaItem): Boolean =
@@ -256,6 +273,9 @@ class HomeViewModel @Inject constructor(
     private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
     private val isLowRamDevice = activityManager.isLowRamDevice || activityManager.memoryClass <= 256
     private val isTvDevice = detectDeviceType(context) == DeviceType.TV
+    init {
+        android.util.Log.d("LogoDebug", "device: isLowRam=$isLowRamDevice isTv=$isTvDevice memClass=${activityManager.memoryClass}")
+    }
     private val gson = com.google.gson.Gson()
 
     // Disk cache key for the home categories — profile-scoped so each profile gets
@@ -559,16 +579,22 @@ class HomeViewModel @Inject constructor(
                 cardLogoUrls[key] = value
             }
         }
+        // Also sync into uiState so HomeScreen (which reads from uiState) recomposes
+        _uiState.value = _uiState.value.copy(cardLogoUrls = snapshot)
     }
 
     private fun publishLogoCacheSnapshotIfChanged() {
         val snapshot: Map<String, String>
         synchronized(logoCacheLock) {
-            if (logoCacheRevision == lastPublishedLogoCacheRevision) return
+            if (logoCacheRevision == lastPublishedLogoCacheRevision) {
+                android.util.Log.d("LogoDebug", "publishLogoCache: no change rev=$logoCacheRevision")
+                return
+            }
             snapshot = LinkedHashMap(logoCache)
             lastPublishedLogoCacheRevision = logoCacheRevision
         }
         lastLogoCachePublishMs = SystemClock.elapsedRealtime()
+        android.util.Log.d("LogoDebug", "publishLogoCache: ${snapshot.size} logos, movieKeys=${snapshot.keys.count { it.startsWith("MOVIE_") }}")
         replaceCardLogoState(snapshot)
     }
 
@@ -583,8 +609,10 @@ class HomeViewModel @Inject constructor(
         }
         if (logoCachePublishJob?.isActive == true) {
             if (highPriority) {
+                android.util.Log.d("LogoDebug", "scheduleLogoCachePublish: cancel active job for highPriority")
                 logoCachePublishJob?.cancel()
             } else {
+                android.util.Log.d("LogoDebug", "scheduleLogoCachePublish: skipped, job already active (lowPriority)")
                 return
             }
         }
@@ -1253,7 +1281,20 @@ class HomeViewModel @Inject constructor(
                             val displayQuick = if (existingCW != null) {
                                 mutableListOf(existingCW) + quickCategories
                             } else {
-                                quickCategories.toMutableList()
+                                // No CW row yet — try to include items from WatchHistoryRepository
+                                // (e.g. cloud-merged entries) so CW doesn't vanish during catalog load.
+                                val historyCw = runCatching { loadContinueWatchingFromHistoryStable() }.getOrDefault(emptyList())
+                                if (historyCw.isNotEmpty()) {
+                                    val merged = mergeContinueWatchingResumeData(historyCw)
+                                    val cwCat = Category(
+                                        id = "continue_watching",
+                                        title = "Continue Watching",
+                                        items = merged.map { it.toMediaItem() }
+                                    )
+                                    mutableListOf(cwCat) + quickCategories
+                                } else {
+                                    quickCategories.toMutableList()
+                                }
                             }
                             _uiState.value = _uiState.value.copy(
                                 isLoading = true,
@@ -1706,12 +1747,15 @@ class HomeViewModel @Inject constructor(
 
                 // On mobile/touch devices, prefetch logos for ALL categories in the background
                 // since there's no D-pad focus to trigger incremental loading.
-                if (!isLowRamDevice && !isTvDevice) {
+                // Low-RAM devices still need logos — just use longer delays to avoid jank.
+                if (!isTvDevice) {
                     viewModelScope.launch(networkDispatcher) {
-                        delay(1_500L) // Let initial UI settle first
+                        val settleDelay = if (isLowRamDevice) 3_000L else 1_500L
+                        val staggerDelay = if (isLowRamDevice) 600L else 300L
+                        delay(settleDelay) // Let initial UI settle first
                         for (i in initialLogoPrefetchRows until categories.size) {
-                            preloadLogosForCategory(i, prioritizeVisible = false)
-                            delay(300L) // Stagger to avoid API rate limiting
+                            fetchLogosForCategory(i, prioritizeVisible = false)
+                            delay(staggerDelay) // Stagger to avoid API rate limiting
                         }
                     }
                 }
@@ -2326,7 +2370,10 @@ class HomeViewModel @Inject constructor(
                     episodeTitle = entry.episode_title,
                     backdropPath = entry.backdrop_path,
                     posterPath = entry.poster_path,
-                    updatedAtMs = parseContinueWatchingUpdatedAt(entry.updated_at, entry.paused_at)
+                    updatedAtMs = parseContinueWatchingUpdatedAt(entry.updated_at, entry.paused_at),
+                    lastAddonId = entry.last_addon_id,
+                    lastSourceName = entry.last_source_name,
+                    lastBingeGroup = entry.last_binge_group
                 )
             }
             traktRepository.enrichContinueWatchingItems(mapped)
@@ -2378,7 +2425,16 @@ class HomeViewModel @Inject constructor(
     private suspend fun preloadStartupContinueWatchingItems(): List<ContinueWatchingItem> {
         val isTraktAuthenticated = runCatching { traktRepository.isAuthenticated.first() }.getOrDefault(false)
         val items = if (isTraktAuthenticated) {
-            runCatching { traktRepository.preloadContinueWatchingCache() }.getOrDefault(emptyList())
+            val traktCached = runCatching { traktRepository.preloadContinueWatchingCache() }.getOrDefault(emptyList())
+            // Also include items from WatchHistoryRepository (e.g. cloud-merged entries
+            // that haven't been synced to Trakt yet). Without this, cold-start after a
+            // cloud sync shows an empty CW row until the slow Trakt fetch completes.
+            if (traktCached.isNotEmpty()) {
+                traktCached
+            } else {
+                val historyItems = loadContinueWatchingFromHistoryStable()
+                if (historyItems.isNotEmpty()) historyItems else traktCached
+            }
         } else {
             val historyItems = loadContinueWatchingFromHistoryStable()
             if (historyItems.isNotEmpty()) {
@@ -2441,7 +2497,10 @@ class HomeViewModel @Inject constructor(
                         durationSeconds = match.duration_seconds.coerceAtLeast(0L),
                         season = item.season ?: match.season,
                         episode = item.episode ?: match.episode,
-                        episodeTitle = item.episodeTitle ?: match.episode_title
+                        episodeTitle = item.episodeTitle ?: match.episode_title,
+                        lastAddonId = item.lastAddonId ?: match.last_addon_id,
+                        lastSourceName = item.lastSourceName ?: match.last_source_name,
+                        lastBingeGroup = item.lastBingeGroup ?: match.last_binge_group
                     )
                 }
             }
@@ -2914,7 +2973,82 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
+     * Core logo-fetching logic for a single category.
+     * Does NOT cancel any running job — safe to call from a sequential loop.
+     */
+    private suspend fun fetchLogosForCategory(categoryIndex: Int, prioritizeVisible: Boolean) {
+        val categories = _uiState.value.categories
+        if (categoryIndex < 0 || categoryIndex >= categories.size) return
+        val category = categories[categoryIndex]
+        if (category.id.startsWith("collection_row_")) return
+        // Background preloading should fetch ALL items; only focus-triggered preloading
+        // needs a cap to avoid jank during rapid scrolling.
+        val maxLogoItems = if (prioritizeVisible) prioritizedLogoPrefetchItems else Int.MAX_VALUE
+
+        val itemsToLoad = category.items.take(maxLogoItems).filter { item ->
+            if (!isActionableMediaItem(item)) {
+                android.util.Log.d("LogoDebug", "skip ${item.mediaType}/${item.id} not actionable")
+                return@filter false
+            }
+            val key = "${item.mediaType}_${item.id}"
+            if (hasCachedLogo(key)) {
+                android.util.Log.d("LogoDebug", "skip ${item.mediaType}/${item.id} hasCachedLogo=$key")
+                return@filter false
+            }
+            if (!logoFetchInFlight.add(key)) {
+                android.util.Log.d("LogoDebug", "skip ${item.mediaType}/${item.id} inFlight=$key")
+                return@filter false
+            }
+            true
+        }
+
+        android.util.Log.d("LogoDebug", "cat=${category.id} items=${category.items.size} toLoad=${itemsToLoad.size}")
+
+        if (itemsToLoad.isNotEmpty()) {
+            val newLogos = coroutineScope {
+                val logoJobs = itemsToLoad.map { item ->
+                    async(networkDispatcher) {
+                        val key = "${item.mediaType}_${item.id}"
+                        try {
+                            android.util.Log.d("LogoDebug", "fetching logo ${item.mediaType}/${item.id}")
+                            val logoUrl = mediaRepository.getLogoUrl(item.mediaType, item.id)
+                            android.util.Log.d("LogoDebug", "fetched logo ${item.mediaType}/${item.id} -> ${logoUrl ?: "null"}")
+                            if (logoUrl != null) key to logoUrl else null
+                        } catch (e: Exception) {
+                            android.util.Log.d("LogoDebug", "logo fetch failed ${item.mediaType}/${item.id}: ${e.message}")
+                            null
+                        } finally {
+                            logoFetchInFlight.remove(key)
+                        }
+                    }
+                }
+                logoJobs.awaitAll().filterNotNull().toMap()
+            }
+            android.util.Log.d("LogoDebug", "cat=${category.id} newLogos=${newLogos.size}")
+            if (newLogos.isNotEmpty()) {
+                if (putCachedLogos(newLogos)) {
+                    scheduleLogoCachePublish(highPriority = prioritizeVisible)
+                }
+                // Preload actual images
+                preloadLogoImages(newLogos.values.toList())
+            }
+        }
+
+        // Also preload backdrops
+        val backdropItems = if (prioritizeVisible) {
+            incrementalBackdropPrefetchItems + 1
+        } else {
+            incrementalBackdropPrefetchItems
+        }
+        val backdropUrls = category.items.take(backdropItems).mapNotNull { it.backdrop ?: it.image }
+        preloadBackdropImages(backdropUrls)
+    }
+
+    /**
      * Phase 1.1: Preload logos for category + next 2 categories
+     * Used by focus-triggered preloading — cancels previous job so only the
+     * latest focused row is fetched. The background loop uses fetchLogosForCategory
+     * directly to avoid self-cancellation.
      */
     fun preloadLogosForCategory(categoryIndex: Int, prioritizeVisible: Boolean = false) {
         if (prioritizeVisible) {
@@ -2930,50 +3064,7 @@ class HomeViewModel @Inject constructor(
                     if (isLowRamDevice) 200L else 100L
                 }
             )
-            val categories = _uiState.value.categories
-            if (categoryIndex < 0 || categoryIndex >= categories.size) return@launch
-            val category = categories[categoryIndex]
-            if (category.id.startsWith("collection_row_")) return@launch
-            val maxLogoItems = if (prioritizeVisible) prioritizedLogoPrefetchItems else incrementalLogoPrefetchItems
-
-            val itemsToLoad = category.items.take(maxLogoItems).filter { item ->
-                if (!isActionableMediaItem(item)) return@filter false
-                val key = "${item.mediaType}_${item.id}"
-                !hasCachedLogo(key) && logoFetchInFlight.add(key)
-            }
-
-            if (itemsToLoad.isNotEmpty()) {
-                val logoJobs = itemsToLoad.map { item ->
-                    async(networkDispatcher) {
-                        val key = "${item.mediaType}_${item.id}"
-                        try {
-                            val logoUrl = mediaRepository.getLogoUrl(item.mediaType, item.id)
-                            if (logoUrl != null) key to logoUrl else null
-                        } catch (e: Exception) {
-                            null
-                        } finally {
-                            logoFetchInFlight.remove(key)
-                        }
-                    }
-                }
-                val newLogos = logoJobs.awaitAll().filterNotNull().toMap()
-                if (newLogos.isNotEmpty()) {
-                    if (putCachedLogos(newLogos)) {
-                        scheduleLogoCachePublish(highPriority = prioritizeVisible)
-                    }
-                    // Preload actual images
-                    preloadLogoImages(newLogos.values.toList())
-                }
-            }
-
-            // Also preload backdrops
-            val backdropItems = if (prioritizeVisible) {
-                incrementalBackdropPrefetchItems + 1
-            } else {
-                incrementalBackdropPrefetchItems
-            }
-            val backdropUrls = category.items.take(backdropItems).mapNotNull { it.backdrop ?: it.image }
-            preloadBackdropImages(backdropUrls)
+            fetchLogosForCategory(categoryIndex, prioritizeVisible)
         }
         if (prioritizeVisible) {
             preloadCategoryPriorityJob = targetJob

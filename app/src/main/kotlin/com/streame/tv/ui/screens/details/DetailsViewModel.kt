@@ -83,7 +83,11 @@ data class DetailsUiState(
     val playLabel: String? = null,
     val playPositionMs: Long? = null,
     val autoPlaySingleSource: Boolean = true,
-    val autoPlayMinQuality: String = "Any"
+    val autoPlayMinQuality: String = "Any",
+    // Last-played source info for same-source resume
+    val lastAddonId: String? = null,
+    val lastSourceName: String? = null,
+    val lastBingeGroup: String? = null
 )
 
 data class StreamingServiceUi(
@@ -95,7 +99,10 @@ private data class PlayTarget(
     val season: Int? = null,
     val episode: Int? = null,
     val label: String,
-    val positionMs: Long? = null
+    val positionMs: Long = 0L,
+    val lastAddonId: String? = null,
+    val lastSourceName: String? = null,
+    val lastBingeGroup: String? = null
 )
 
 private data class SeasonProgressResult(
@@ -108,7 +115,10 @@ private data class ResumeInfo(
     val season: Int? = null,
     val episode: Int? = null,
     val label: String,
-    val positionMs: Long
+    val positionMs: Long,
+    val lastAddonId: String? = null,
+    val lastSourceName: String? = null,
+    val lastBingeGroup: String? = null
 )
 
 // TMDB Genre mappings
@@ -626,7 +636,10 @@ class DetailsViewModel @Inject constructor(
                                 playSeason = initialSeason,
                                 playEpisode = initialEpisode,
                                 playLabel = matchedResume?.label ?: "Continue S${initialSeason}E${initialEpisode}",
-                                playPositionMs = matchedResume?.positionMs
+                                playPositionMs = matchedResume?.positionMs,
+                                lastAddonId = matchedResume?.lastAddonId,
+                                lastSourceName = matchedResume?.lastSourceName,
+                                lastBingeGroup = matchedResume?.lastBingeGroup
                             )
                         }
                         return@launch
@@ -639,7 +652,10 @@ class DetailsViewModel @Inject constructor(
                                 playSeason = playTarget?.season,
                                 playEpisode = playTarget?.episode,
                                 playLabel = playTarget?.label,
-                                playPositionMs = playTarget?.positionMs
+                                playPositionMs = playTarget?.positionMs,
+                                lastAddonId = playTarget?.lastAddonId,
+                                lastSourceName = playTarget?.lastSourceName,
+                                lastBingeGroup = playTarget?.lastBingeGroup
                             )
                         }
                     } else {
@@ -650,7 +666,10 @@ class DetailsViewModel @Inject constructor(
                                 playSeason = playTarget?.season,
                                 playEpisode = playTarget?.episode,
                                 playLabel = playTarget?.label,
-                                playPositionMs = playTarget?.positionMs
+                                playPositionMs = playTarget?.positionMs,
+                                lastAddonId = playTarget?.lastAddonId,
+                                lastSourceName = playTarget?.lastSourceName,
+                                lastBingeGroup = playTarget?.lastBingeGroup
                             )
                         }
                     }
@@ -1026,7 +1045,10 @@ class DetailsViewModel @Inject constructor(
                     season = quickResume.season,
                     episode = quickResume.episode,
                     label = quickResume.label,
-                    positionMs = quickResume.positionMs
+                    positionMs = quickResume.positionMs,
+                    lastAddonId = quickResume.lastAddonId,
+                    lastSourceName = quickResume.lastSourceName,
+                    lastBingeGroup = quickResume.lastBingeGroup
                 )
             } else if (mediaType == MediaType.TV) {
                 // No resume point (episode was finished) — find the next unwatched episode
@@ -1047,7 +1069,10 @@ class DetailsViewModel @Inject constructor(
                 playSeason = playTarget?.season ?: latestState.playSeason,
                 playEpisode = playTarget?.episode ?: latestState.playEpisode,
                 playLabel = playTarget?.label ?: latestState.playLabel,
-                playPositionMs = playTarget?.positionMs ?: 0L
+                playPositionMs = playTarget?.positionMs ?: 0L,
+                lastAddonId = playTarget?.lastAddonId ?: latestState.lastAddonId,
+                lastSourceName = playTarget?.lastSourceName ?: latestState.lastSourceName,
+                lastBingeGroup = playTarget?.lastBingeGroup ?: latestState.lastBingeGroup
             )
         }
     }
@@ -1546,6 +1571,9 @@ class DetailsViewModel @Inject constructor(
                     playEpisode = playTarget?.episode ?: _uiState.value.playEpisode,
                     playLabel = playTarget?.label ?: _uiState.value.playLabel,
                     playPositionMs = playTarget?.positionMs ?: _uiState.value.playPositionMs,
+                    lastAddonId = playTarget?.lastAddonId ?: _uiState.value.lastAddonId,
+                    lastSourceName = playTarget?.lastSourceName ?: _uiState.value.lastSourceName,
+                    lastBingeGroup = playTarget?.lastBingeGroup ?: _uiState.value.lastBingeGroup,
                     toastMessage = "Season $season marked as watched",
                     toastType = ToastType.SUCCESS
                 )
@@ -1652,7 +1680,10 @@ class DetailsViewModel @Inject constructor(
                     episode = entry.episode,
                     progress = entry.progress,
                     positionSeconds = entry.position_seconds,
-                    durationSeconds = entry.duration_seconds
+                    durationSeconds = entry.duration_seconds,
+                    lastAddonId = entry.last_addon_id,
+                    lastSourceName = entry.last_source_name,
+                    lastBingeGroup = entry.last_binge_group
                 )
                 resume
             } else null
@@ -1717,7 +1748,10 @@ class DetailsViewModel @Inject constructor(
                     episode = resumeCandidate.episode,
                     progress = resumeCandidate.progress / 100f,
                     positionSeconds = resumeCandidate.resumePositionSeconds,
-                    durationSeconds = resumeCandidate.durationSeconds
+                    durationSeconds = resumeCandidate.durationSeconds,
+                    lastAddonId = resumeCandidate.lastAddonId,
+                    lastSourceName = resumeCandidate.lastSourceName,
+                    lastBingeGroup = resumeCandidate.lastBingeGroup
                 )
                 resume
             } else null
@@ -1759,7 +1793,10 @@ class DetailsViewModel @Inject constructor(
                 episode = entry.episode,
                 progress = entry.progress,
                 positionSeconds = entry.position_seconds,
-                durationSeconds = entry.duration_seconds
+                durationSeconds = entry.duration_seconds,
+                lastAddonId = entry.last_addon_id,
+                lastSourceName = entry.last_source_name,
+                lastBingeGroup = entry.last_binge_group
             )
         } catch (_: Exception) {
             null
@@ -1773,7 +1810,10 @@ class DetailsViewModel @Inject constructor(
         episode: Int?,
         progress: Float,
         positionSeconds: Long,
-        durationSeconds: Long
+        durationSeconds: Long,
+        lastAddonId: String? = null,
+        lastSourceName: String? = null,
+        lastBingeGroup: String? = null
     ): ResumeInfo? {
         val normalizedDuration = if (durationSeconds > 86_400L) durationSeconds / 1000L else durationSeconds
         val normalizedPosition = if (positionSeconds > 86_400L) positionSeconds / 1000L else positionSeconds
@@ -1800,7 +1840,10 @@ class DetailsViewModel @Inject constructor(
         return if (mediaType == MediaType.MOVIE) {
             ResumeInfo(
                 label = "Continue at $timeLabel",
-                positionMs = seconds * 1000L
+                positionMs = seconds * 1000L,
+                lastAddonId = lastAddonId,
+                lastSourceName = lastSourceName,
+                lastBingeGroup = lastBingeGroup
             )
         } else {
             val s = season ?: return null
@@ -1809,7 +1852,10 @@ class DetailsViewModel @Inject constructor(
                 season = s,
                 episode = e,
                 label = "Continue S${s}E${e} at $timeLabel",
-                positionMs = seconds * 1000L
+                positionMs = seconds * 1000L,
+                lastAddonId = lastAddonId,
+                lastSourceName = lastSourceName,
+                lastBingeGroup = lastBingeGroup
             )
         }
     }
@@ -1866,7 +1912,10 @@ class DetailsViewModel @Inject constructor(
                 season = resumeInfo.season,
                 episode = resumeInfo.episode,
                 label = resumeInfo.label,
-                positionMs = resumeInfo.positionMs
+                positionMs = resumeInfo.positionMs,
+                lastAddonId = resumeInfo.lastAddonId,
+                lastSourceName = resumeInfo.lastSourceName,
+                lastBingeGroup = resumeInfo.lastBingeGroup
             )
         }
         if (mediaType == MediaType.MOVIE) return null

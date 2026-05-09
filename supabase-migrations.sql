@@ -54,9 +54,17 @@ CREATE TABLE IF NOT EXISTS watch_progress (
     last_watched BIGINT NOT NULL DEFAULT 0,
     progress_key TEXT NOT NULL,
     profile_id   INT NOT NULL DEFAULT 1,
+    last_addon_id    TEXT DEFAULT NULL,
+    last_source_name TEXT DEFAULT NULL,
+    last_binge_group TEXT DEFAULT NULL,
     created_at   TIMESTAMPTZ DEFAULT now(),
     UNIQUE(user_id, progress_key, profile_id)
 );
+
+-- Add source columns to existing tables (safe for already-migrated DBs)
+DO $$ BEGIN ALTER TABLE watch_progress ADD COLUMN IF NOT EXISTS last_addon_id TEXT DEFAULT NULL; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'last_addon_id already exists on watch_progress'; END $$;
+DO $$ BEGIN ALTER TABLE watch_progress ADD COLUMN IF NOT EXISTS last_source_name TEXT DEFAULT NULL; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'last_source_name already exists on watch_progress'; END $$;
+DO $$ BEGIN ALTER TABLE watch_progress ADD COLUMN IF NOT EXISTS last_binge_group TEXT DEFAULT NULL; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'last_binge_group already exists on watch_progress'; END $$;
 
 DO $$ BEGIN ALTER TABLE watch_progress ENABLE ROW LEVEL SECURITY; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'RLS already enabled on watch_progress'; END $$;
 DO $$ BEGIN CREATE POLICY watch_progress_owner ON watch_progress FOR ALL USING (auth.uid() = user_id); EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'Policy watch_progress_owner already exists'; END $$;
@@ -294,11 +302,12 @@ LANGUAGE plpgsql SECURITY DEFINER
 AS $$
 BEGIN
     DELETE FROM watch_progress WHERE user_id = auth.uid() AND profile_id = p_profile_id;
-    INSERT INTO watch_progress (user_id, content_id, content_type, video_id, season, episode, position, duration, last_watched, progress_key, profile_id)
+    INSERT INTO watch_progress (user_id, content_id, content_type, video_id, season, episode, position, duration, last_watched, progress_key, profile_id, last_addon_id, last_source_name, last_binge_group)
     SELECT auth.uid(), i->>'content_id', i->>'content_type', i->>'video_id',
            (i->>'season')::int, (i->>'episode')::int,
            (i->>'position')::bigint, (i->>'duration')::bigint,
-           (i->>'last_watched')::bigint, i->>'progress_key', p_profile_id
+           (i->>'last_watched')::bigint, i->>'progress_key', p_profile_id,
+           i->>'last_addon_id', i->>'last_source_name', i->>'last_binge_group'
     FROM jsonb_array_elements(p_items) AS i;
 END;
 $$;

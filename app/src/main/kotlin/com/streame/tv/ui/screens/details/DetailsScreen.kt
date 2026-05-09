@@ -179,7 +179,7 @@ fun DetailsScreen(
     initialEpisode: Int? = null,
     viewModel: DetailsViewModel = hiltViewModel(),
     currentProfile: com.streame.tv.data.model.Profile? = null,
-    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, Long?) -> Unit,
+    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?) -> Unit,
     onNavigateToDetails: (MediaType, Int) -> Unit,
     onNavigateToHome: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
@@ -307,6 +307,7 @@ fun DetailsScreen(
                     singleStream.url?.takeIf { it.isNotBlank() },
                     singleStream.addonId.takeIf { it.isNotBlank() },
                     singleStream.source.takeIf { it.isNotBlank() },
+                    singleStream.behaviorHints?.bingeGroup?.takeIf { it.isNotBlank() },
                     request.startPositionMs
                 )
             }
@@ -544,8 +545,9 @@ fun DetailsScreen(
                                                     episode,
                                                     uiState.imdbId,
                                                     null,
-                                                    null,
-                                                    null,
+                                                    uiState.lastAddonId,
+                                                    uiState.lastSourceName,
+                                                    uiState.lastBingeGroup,
                                                     startPositionMs
                                                 )
                                             }
@@ -574,7 +576,7 @@ fun DetailsScreen(
                                         } else {
                                             onNavigateToPlayer(
                                                 mediaType, mediaId,
-                                                ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null
+                                                ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null, null
                                             )
                                         }
                                     }
@@ -703,7 +705,9 @@ fun DetailsScreen(
                                     // Autoplay ON → go straight to the player; PlayerScreen auto-picks.
                                     onNavigateToPlayer(
                                         mediaType, mediaId, season, episode,
-                                        uiState.imdbId, null, null, null, startPositionMs
+                                        uiState.imdbId, null,
+                                        uiState.lastAddonId, uiState.lastSourceName, uiState.lastBingeGroup,
+                                        startPositionMs
                                     )
                                 }
                             }
@@ -732,7 +736,7 @@ fun DetailsScreen(
                             } else {
                                 onNavigateToPlayer(
                                     mediaType, mediaId,
-                                    ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null
+                                    ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null, null
                                 )
                             }
                         }
@@ -838,6 +842,7 @@ fun DetailsScreen(
                     stream.url?.takeIf { it.isNotBlank() },
                     stream.addonId.takeIf { it.isNotBlank() },
                     stream.source.takeIf { it.isNotBlank() },
+                    stream.behaviorHints?.bingeGroup?.takeIf { it.isNotBlank() },
                     null
                 )
             },
@@ -859,7 +864,7 @@ fun DetailsScreen(
                     } else {
                         onNavigateToPlayer(
                             mediaType, mediaId,
-                            episode.seasonNumber, episode.episodeNumber, uiState.imdbId, null, null, null, null
+                            episode.seasonNumber, episode.episodeNumber, uiState.imdbId, null, null, null, null, null
                         )
                     }
                 },

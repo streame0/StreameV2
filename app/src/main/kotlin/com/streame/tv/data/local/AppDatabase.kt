@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CatalogConfigEntity::class,
         WatchHistoryEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -33,8 +33,16 @@ abstract class AppDatabase : RoomDatabase() {
          *       db.execSQL("ALTER TABLE watch_history ADD COLUMN newColumn TEXT DEFAULT NULL")
          *   }
          */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE watch_history ADD COLUMN lastAddonId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE watch_history ADD COLUMN lastSourceName TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE watch_history ADD COLUMN lastBingeGroup TEXT DEFAULT NULL")
+            }
+        }
+
         private val MIGRATIONS: Array<Migration> = arrayOf(
-            // Add migrations here as the schema evolves.
+            MIGRATION_1_2
         )
 
         fun getInstance(context: Context): AppDatabase {

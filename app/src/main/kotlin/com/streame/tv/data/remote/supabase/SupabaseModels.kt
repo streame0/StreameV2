@@ -33,7 +33,11 @@ data class SupabaseWatchProgress(
     val duration: Long,
     @SerialName("last_watched") val lastWatched: Long,
     @SerialName("progress_key") val progressKey: String,
-    @SerialName("profile_id") val profileId: Int = 1
+    @SerialName("profile_id") val profileId: Int = 1,
+    // Last-played source info for same-source resume
+    @SerialName("last_addon_id") val lastAddonId: String? = null,
+    @SerialName("last_source_name") val lastSourceName: String? = null,
+    @SerialName("last_binge_group") val lastBingeGroup: String? = null
 )
 
 @Serializable

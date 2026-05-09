@@ -34,7 +34,11 @@ data class WatchHistoryEntry(
     val updated_at: String? = null,
     val source: String? = null,
     val backdrop_path: String? = null,
-    val poster_path: String? = null
+    val poster_path: String? = null,
+    // Last-played source info for same-source resume
+    val last_addon_id: String? = null,
+    val last_source_name: String? = null,
+    val last_binge_group: String? = null
 )
 
 /**
@@ -95,7 +99,10 @@ class WatchHistoryRepository @Inject constructor(
         episodeTitle: String?,
         progress: Float,
         duration: Long,
-        position: Long
+        position: Long,
+        lastAddonId: String? = null,
+        lastSourceName: String? = null,
+        lastBingeGroup: String? = null
     ) {
         val userId = authRepositoryProvider.get().getCurrentUserId() ?: return
 
@@ -113,7 +120,10 @@ class WatchHistoryRepository @Inject constructor(
             progress = progress,
             duration_seconds = duration,
             position_seconds = position,
-            source = profileHistorySource("Streame")
+            source = profileHistorySource("Streame"),
+            last_addon_id = lastAddonId,
+            last_source_name = lastSourceName,
+            last_binge_group = lastBingeGroup
         )
 
         val profileId = currentProfileId()
@@ -123,16 +133,25 @@ class WatchHistoryRepository @Inject constructor(
             updated_at = nowIso
         )
         val profileCache = cachedContinueWatchingByProfile[profileId].orEmpty()
-        cachedContinueWatching = if (isEntryInProgress(cachedEntry)) {
-            listOf(cachedEntry) + profileCache.filterNot { existing ->
-                existing.media_type == cachedEntry.media_type &&
-                    existing.show_tmdb_id == cachedEntry.show_tmdb_id
+        // For TV shows, match season+episode to avoid removing other episodes of the same show.
+        // For movies, match only show_tmdb_id (season/episode are null).
+        val isSameEntry: (WatchHistoryEntry) -> Boolean = if (entry.media_type == "tv" && entry.season != null && entry.episode != null) {
+            { existing ->
+                existing.media_type == entry.media_type &&
+                    existing.show_tmdb_id == entry.show_tmdb_id &&
+                    existing.season == entry.season &&
+                    existing.episode == entry.episode
             }
         } else {
-            profileCache.filterNot { existing ->
-                existing.media_type == cachedEntry.media_type &&
-                    existing.show_tmdb_id == cachedEntry.show_tmdb_id
+            { existing ->
+                existing.media_type == entry.media_type &&
+                    existing.show_tmdb_id == entry.show_tmdb_id
             }
+        }
+        cachedContinueWatching = if (isEntryInProgress(cachedEntry)) {
+            listOf(cachedEntry) + profileCache.filterNot { isSameEntry(it) }
+        } else {
+            profileCache.filterNot { isSameEntry(it) }
         }
         cachedContinueWatchingByProfile[profileId] = cachedContinueWatching
 
@@ -279,7 +298,10 @@ class WatchHistoryRepository @Inject constructor(
                 position_seconds = cloud.position,
                 updated_at = java.time.Instant.ofEpochMilli(cloud.lastWatched).toString(),
                 paused_at = java.time.Instant.ofEpochMilli(cloud.lastWatched).toString(),
-                source = profileHistorySource("CloudSync")
+                source = profileHistorySource("CloudSync"),
+                last_addon_id = cloud.lastAddonId,
+                last_source_name = cloud.lastSourceName,
+                last_binge_group = cloud.lastBingeGroup
             )
             val existingEntry = existingKeys[key]
             if (existingEntry == null) {
@@ -334,7 +356,10 @@ class WatchHistoryRepository @Inject constructor(
                     duration = entry.duration_seconds ?: 0L,
                     lastWatched = System.currentTimeMillis(),
                     progressKey = if (entry.media_type == "tv") "tv:${entry.show_tmdb_id}:${entry.season}:${entry.episode}" else "movie:${entry.show_tmdb_id}",
-                    profileId = resolveProfileId()
+                    profileId = resolveProfileId(),
+                    lastAddonId = entry.last_addon_id,
+                    lastSourceName = entry.last_source_name,
+                    lastBingeGroup = entry.last_binge_group
                 )
             }
             watchProgressSyncService.pushToRemote(items, resolveProfileId())

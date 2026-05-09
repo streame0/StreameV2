@@ -224,7 +224,10 @@ class StartupSyncService @Inject constructor(
                     duration = entry.duration_seconds ?: 0L,
                     lastWatched = System.currentTimeMillis(),
                     progressKey = if (entry.media_type == "tv") "tv:${entry.show_tmdb_id}:${entry.season}:${entry.episode}" else "movie:${entry.show_tmdb_id}",
-                    profileId = profileId
+                    profileId = profileId,
+                    lastAddonId = entry.last_addon_id,
+                    lastSourceName = entry.last_source_name,
+                    lastBingeGroup = entry.last_binge_group
                 )
             }
 

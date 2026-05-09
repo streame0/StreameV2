@@ -1603,7 +1603,10 @@ class TraktRepository @Inject constructor(
         progress: Int, // 0-100
         positionSeconds: Long = 0L,
         durationSeconds: Long = 0L,
-        year: String = ""
+        year: String = "",
+        lastAddonId: String? = null,
+        lastSourceName: String? = null,
+        lastBingeGroup: String? = null
     ) {
         ensureProfileCacheScope()
         val hasMeaningfulPosition = positionSeconds >= 60L
@@ -1631,7 +1634,10 @@ class TraktRepository @Inject constructor(
             backdropPath = backdropPath,
             posterPath = posterPath,
             year = year,
-            updatedAtMs = System.currentTimeMillis()
+            updatedAtMs = System.currentTimeMillis(),
+            lastAddonId = lastAddonId,
+            lastSourceName = lastSourceName,
+            lastBingeGroup = lastBingeGroup
         )
 
         // Load existing items (raw - no enrichment needed when saving)
@@ -3427,7 +3433,11 @@ data class ContinueWatchingItem(
     val imdbRating: String = "",
     val duration: String = "",
     val budget: Long? = null,
-    val updatedAtMs: Long = 0L
+    val updatedAtMs: Long = 0L,
+    // Last-played source info for same-source resume
+    val lastAddonId: String? = null,
+    val lastSourceName: String? = null,
+    val lastBingeGroup: String? = null
 ) {
     fun toMediaItem(): MediaItem {
         val resumeSeconds = when {
@@ -3475,7 +3485,10 @@ data class ContinueWatchingItem(
             backdrop = backdropPath,
             badge = null,
             budget = budget,
-            nextEpisode = nextEp
+            nextEpisode = nextEp,
+            lastAddonId = lastAddonId,
+            lastSourceName = lastSourceName,
+            lastBingeGroup = lastBingeGroup
         )
     }
 }

@@ -466,6 +466,7 @@ fun HomeScreen(
     currentProfile: com.streame.tv.data.model.Profile? = null,
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit = { _, _, _, _ -> },
     onNavigateToCollection: (String) -> Unit = {},
+    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
     onNavigateToSearch: () -> Unit = {},
     onNavigateToWatchlist: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
@@ -489,9 +490,7 @@ fun HomeScreen(
     // ViewModel's TMDB/Trakt refresh pushes don't drive recompositions behind
     // an invisible UI.
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    // Per-card logo reads now come from a stable snapshotStateMap so a single
-    // logo arriving no longer recomposes the full home surface.
-    val cardLogoUrls = viewModel.cardLogoUrls
+    val cardLogoUrls = uiState.cardLogoUrls
     val profileCount = if (currentProfile != null) 1 else 0
     val usePosterCards = rememberCardLayoutMode() == CardLayoutMode.POSTER
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -955,7 +954,8 @@ fun HomeScreen(
                 contextMenuItem = item
                 contextMenuIsContinueWatching = isContinue
                 showContextMenu = true
-            }
+            },
+            onNavigateToPlayer = onNavigateToPlayer
         )
 
         if (showCinematicHomeLayer) {
@@ -2027,6 +2027,7 @@ private fun HomeInputLayer(
     onSwitchProfile: () -> Unit,
     onExitApp: () -> Unit,
     onOpenContextMenu: (MediaItem, Boolean) -> Unit,
+    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
 ) {
     val focusRequester = remember { FocusRequester() }
     var selectPressedInHome by remember { mutableStateOf(false) }
@@ -2362,8 +2363,18 @@ private fun HomeInputLayer(
                     return@HomeRowsLayer
                 }
                 val collectionId = item.status?.removePrefix("collection:")?.takeIf { item.status?.startsWith("collection:") == true && it.isNotBlank() }
-                                        if (collectionId != null) {
+                if (collectionId != null) {
                     onNavigateToCollection(collectionId)
+                } else if (item.progress > 0 && (item.lastAddonId != null || item.lastSourceName != null)) {
+                    // Continue Watching with saved source → go directly to player
+                    onNavigateToPlayer(
+                        item.mediaType, item.id,
+                        item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber,
+                        null, // imdbId - player will resolve
+                        null, // streamUrl - player will resolve
+                        item.lastAddonId, item.lastSourceName, item.lastBingeGroup,
+                        null // startPositionMs - PlayerViewModel.resolveResumeData handles it
+                    )
                 } else {
                     onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)
                 }

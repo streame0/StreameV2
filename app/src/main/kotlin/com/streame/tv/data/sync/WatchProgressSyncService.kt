@@ -44,6 +44,9 @@ class WatchProgressSyncService @Inject constructor(
                             put("duration", item.duration)
                             put("last_watched", item.lastWatched)
                             put("progress_key", item.progressKey)
+                            item.lastAddonId?.let { put("last_addon_id", it) }
+                            item.lastSourceName?.let { put("last_source_name", it) }
+                            item.lastBingeGroup?.let { put("last_binge_group", it) }
                         }
                     }
                 })

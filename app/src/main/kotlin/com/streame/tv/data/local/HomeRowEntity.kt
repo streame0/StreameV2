@@ -73,5 +73,9 @@ data class WatchHistoryEntity(
     val progress: Int, // 0-100
     val durationSeconds: Long,
     val positionSeconds: Long,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    // Last-played source info for same-source resume
+    val lastAddonId: String? = null,
+    val lastSourceName: String? = null,
+    val lastBingeGroup: String? = null
 )

@@ -193,6 +193,22 @@ fun AppNavigation(
                 onNavigateToCollection = { catalogId ->
                     navController.navigate(Screen.CollectionDetails.createRoute(catalogId))
                 },
+                onNavigateToPlayer = { type, id, season, episode, imdbId, url, preferredAddonId, preferredSourceName, preferredBingeGroup, startPositionMs ->
+                    navController.navigate(
+                        Screen.Player.createRoute(
+                            mediaType = type,
+                            mediaId = id,
+                            seasonNumber = season,
+                            episodeNumber = episode,
+                            imdbId = imdbId,
+                            streamUrl = url,
+                            preferredAddonId = preferredAddonId,
+                            preferredSourceName = preferredSourceName,
+                            preferredBingeGroup = preferredBingeGroup,
+                            startPositionMs = startPositionMs
+                        )
+                    )
+                },
                 onNavigateToSearch = {
                     navigateTopLevel(Screen.Search.route)
                 },
@@ -341,7 +357,7 @@ fun AppNavigation(
                 initialSeason = initialSeason,
                 initialEpisode = initialEpisode,
                 currentProfile = currentProfile,
-                onNavigateToPlayer = { type, id, season, episode, imdbId, url, preferredAddonId, preferredSourceName, startPositionMs ->
+                onNavigateToPlayer = { type, id, season, episode, imdbId, url, preferredAddonId, preferredSourceName, preferredBingeGroup, startPositionMs ->
                     navController.navigate(
                         Screen.Player.createRoute(
                             mediaType = type,
@@ -352,6 +368,7 @@ fun AppNavigation(
                             streamUrl = url,
                             preferredAddonId = preferredAddonId,
                             preferredSourceName = preferredSourceName,
+                            preferredBingeGroup = preferredBingeGroup,
                             startPositionMs = startPositionMs
                         )
                     )
