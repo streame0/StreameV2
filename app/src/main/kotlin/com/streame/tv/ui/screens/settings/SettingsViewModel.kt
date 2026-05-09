@@ -229,6 +229,8 @@ class SettingsViewModel @Inject constructor(
      * Called after any settings change — fire-and-forget.
      */
     private fun pushProfileSettingsToRemote() {
+        // Mark the edit time immediately so cloud pulls don't revert this change
+        profileSettingsSyncService.lastLocalEditMs = System.currentTimeMillis()
         viewModelScope.launch {
             if (!authManager.isAuthenticated) return@launch
             try {
@@ -798,6 +800,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[autoPlaySingleSourceKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(autoPlaySingleSource = enabled)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -807,6 +810,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[secondarySubtitleKey()] = language
             }
             _uiState.value = _uiState.value.copy(secondarySubtitle = language)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -816,6 +820,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[filterSubtitlesByLanguageKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(filterSubtitlesByLanguage = enabled)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -837,6 +842,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[autoPlayMinQualityKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(autoPlayMinQuality = normalized)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -856,6 +862,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[cardLayoutModeKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(cardLayoutMode = normalized)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -888,6 +895,7 @@ class SettingsViewModel @Inject constructor(
                 if (mode == "auto") null else mode,
             )
             _uiState.value = _uiState.value.copy(deviceModeOverride = mode)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -897,6 +905,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[com.streame.tv.util.SKIP_PROFILE_SELECTION_KEY] = skip
             }
             _uiState.value = _uiState.value.copy(skipProfileSelection = skip)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -917,6 +926,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[frameRateMatchingModeKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(frameRateMatchingMode = normalized)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -940,13 +950,14 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setTrailerAutoPlay(enabled: Boolean) {
-        viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled) }
+        viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled); pushProfileSettingsToRemote() }
     }
 
     fun setShowBudget(enabled: Boolean) {
         viewModelScope.launch {
             context.settingsDataStore.edit { it[showBudgetKey()] = enabled }
             _uiState.value = _uiState.value.copy(showBudget = enabled)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -954,6 +965,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[showLoadingStatsKey()] = enabled }
             _uiState.value = _uiState.value.copy(showLoadingStats = enabled)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -962,6 +974,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[clockFormatKey()] = next }
             _uiState.value = _uiState.value.copy(clockFormat = next)
+            pushProfileSettingsToRemote()
         }
     }
 
@@ -984,17 +997,18 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[volumeBoostDbKey()] = next.toString() }
             _uiState.value = _uiState.value.copy(volumeBoostDb = next)
+            pushProfileSettingsToRemote()
         }
     }
 
     fun cycleSubtitleSize() {
         val next = when (_uiState.value.subtitleSize) { "Small" -> "Medium"; "Medium" -> "Large"; "Large" -> "Extra Large"; else -> "Small" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next) }
+        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next); pushProfileSettingsToRemote() }
     }
 
     fun cycleSubtitleColor() {
         val next = when (_uiState.value.subtitleColor) { "White" -> "Yellow"; "Yellow" -> "Green"; "Green" -> "Cyan"; else -> "White" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next) }
+        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next); pushProfileSettingsToRemote() }
     }
 
     private fun normalizeDnsProviderValue(raw: String?): String {
@@ -1060,6 +1074,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[includeSpecialsKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(includeSpecials = enabled)
+            pushProfileSettingsToRemote()
         }
     }
 

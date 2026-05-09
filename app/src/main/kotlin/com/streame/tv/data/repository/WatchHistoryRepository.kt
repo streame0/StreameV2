@@ -58,6 +58,10 @@ class WatchHistoryRepository @Inject constructor(
     private val _cloudMergeEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1, replay = 1)
     val cloudMergeEvents: SharedFlow<Unit> = _cloudMergeEvents.asSharedFlow()
 
+    /** Emits Unit whenever local watch progress is saved, so observers (e.g. HomeViewModel) can refresh Continue Watching. */
+    private val _localUpdateEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val localUpdateEvents: SharedFlow<Unit> = _localUpdateEvents.asSharedFlow()
+
     private fun currentProfileId(): String = profileManager.getProfileIdSync().ifBlank { "default" }
 
     private fun profileHistorySource(base: String): String {
@@ -131,6 +135,9 @@ class WatchHistoryRepository @Inject constructor(
             }
         }
         cachedContinueWatchingByProfile[profileId] = cachedContinueWatching
+
+        // Notify observers that local data changed
+        _localUpdateEvents.tryEmit(Unit)
 
         // Push to Supabase if authenticated
         pushWatchProgressToRemote()

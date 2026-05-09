@@ -181,6 +181,11 @@ class DetailsViewModel @Inject constructor(
     private var streamListPrewarmJob: kotlinx.coroutines.Job? = null
     /** Set to true after loadDetails() child coroutines finish populating episodes/seasons. */
     @Volatile private var initialLoadComplete = false
+
+    init {
+        observeAutoPlaySetting()
+    }
+
     private fun autoPlaySingleSourceKey() = profileManager.profileBooleanKey("auto_play_single_source")
     private fun autoPlayMinQualityKey() = profileManager.profileStringKey("auto_play_min_quality")
     private fun showBudgetKey() = profileManager.profileBooleanKey("show_budget_on_home")
@@ -929,22 +934,32 @@ class DetailsViewModel @Inject constructor(
     }
 
     /**
+     * Observe autoplay setting changes from DataStore continuously so changes
+     * made in Settings take effect immediately without needing ON_RESUME.
+     */
+    private fun observeAutoPlaySetting() {
+        viewModelScope.launch {
+            context.settingsDataStore.data.collect { prefs ->
+                val autoPlaySingleSource = prefs[autoPlaySingleSourceKey()] ?: true
+                val autoPlayMinQuality = normalizeAutoPlayMinQuality(prefs[autoPlayMinQualityKey()])
+                if (_uiState.value.autoPlaySingleSource != autoPlaySingleSource ||
+                    _uiState.value.autoPlayMinQuality != autoPlayMinQuality) {
+                    _uiState.value = _uiState.value.copy(
+                        autoPlaySingleSource = autoPlaySingleSource,
+                        autoPlayMinQuality = autoPlayMinQuality
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * Re-read the autoplay setting from DataStore so changes made in Settings
      * take effect immediately when returning to this screen.
      */
     fun refreshAutoPlaySetting() {
-        viewModelScope.launch {
-            val prefs = context.settingsDataStore.data.first()
-            val autoPlaySingleSource = prefs[autoPlaySingleSourceKey()] ?: true
-            val autoPlayMinQuality = normalizeAutoPlayMinQuality(prefs[autoPlayMinQualityKey()])
-            if (_uiState.value.autoPlaySingleSource != autoPlaySingleSource ||
-                _uiState.value.autoPlayMinQuality != autoPlayMinQuality) {
-                _uiState.value = _uiState.value.copy(
-                    autoPlaySingleSource = autoPlaySingleSource,
-                    autoPlayMinQuality = autoPlayMinQuality
-                )
-            }
-        }
+        // The continuous observer in init handles this automatically,
+        // but keep the method as a no-op fallback for the ON_RESUME call.
     }
 
     /**

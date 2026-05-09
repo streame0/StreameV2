@@ -255,6 +255,7 @@ fun PlayerScreen(
     var currentVolume by remember { mutableIntStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
     val maxVolume = remember { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
     var showVolumeIndicator by remember { mutableStateOf(false) }
+    var volumeIndicatorTrigger by remember { mutableIntStateOf(0) }
     var showAspectIndicator by remember { mutableStateOf(false) }
     var aspectIndicatorTrigger by remember { mutableIntStateOf(0) }
     var isMuted by remember { mutableStateOf(false) }
@@ -1332,8 +1333,9 @@ fun PlayerScreen(
             showAspectIndicator = false
         }
     }
-    LaunchedEffect(showVolumeIndicator) {
-        if (showVolumeIndicator) {
+    LaunchedEffect(volumeIndicatorTrigger) {
+        if (volumeIndicatorTrigger > 0) {
+            showVolumeIndicator = true
             kotlinx.coroutines.delay(1500)
             showVolumeIndicator = false
         }
@@ -1346,6 +1348,7 @@ fun PlayerScreen(
         currentVolume = newVolume
         isMuted = newVolume == 0
         showVolumeIndicator = true
+        volumeIndicatorTrigger++
     }
 
     fun toggleMute() {
@@ -1360,6 +1363,7 @@ fun PlayerScreen(
             isMuted = true
         }
         showVolumeIndicator = true
+        volumeIndicatorTrigger++
     }
 
     // Update progress periodically

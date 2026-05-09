@@ -878,6 +878,11 @@ class HomeViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            watchHistoryRepository.localUpdateEvents.collect {
+                refreshContinueWatchingOnly(force = true)
+            }
+        }
+        viewModelScope.launch {
             catalogRepository.observeCatalogs()
                 .map { catalogs ->
                     catalogs.joinToString("|") { "${it.id}:${it.title}:${it.sourceUrl.orEmpty()}" }

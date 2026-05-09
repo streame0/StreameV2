@@ -40,6 +40,10 @@ class ProfileSettingsSyncService @Inject constructor(
     private var lastPushedSignature: String? = null
     private var skipNextPushSignature: String? = null
 
+    /** Timestamp of the last local settings edit. Cloud pulls within 60s of a local edit are skipped to avoid reverting user changes. */
+    @Volatile
+    var lastLocalEditMs: Long = 0L
+
     companion object {
         private const val DEBOUNCE_DELAY_MS = 1500L
     }
@@ -72,6 +76,7 @@ class ProfileSettingsSyncService @Inject constructor(
                 postgrest.rpc("sync_push_profile_settings", params)
             }
             lastPushedSignature = signature
+            lastLocalEditMs = System.currentTimeMillis()
             Log.d(TAG, "Pushed profile settings to remote for profile $profileId")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -132,6 +137,13 @@ class ProfileSettingsSyncService @Inject constructor(
      * Maps JSON keys back to DataStore preference keys.
      */
     private suspend fun applySettingsToLocal(settingsJson: JsonObject, profileId: Int) {
+        // Skip applying cloud settings if a local edit happened within the last 60 seconds
+        // to avoid reverting user changes that haven't been pushed yet.
+        val timeSinceLocalEdit = System.currentTimeMillis() - lastLocalEditMs
+        if (lastLocalEditMs > 0L && timeSinceLocalEdit < 60_000L) {
+            Log.d(TAG, "Skipping cloud settings apply — local edit was ${timeSinceLocalEdit}ms ago (< 60s)")
+            return
+        }
         val prefs = appContext.settingsDataStore.data.first()
         val currentMap = prefs.asMap().toMutableMap()
         var changed = false
