@@ -1,5 +1,6 @@
 package com.streame.tv.ui.screens.watchlist
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -128,6 +129,19 @@ fun WatchlistScreen(
     val gridState = rememberTvLazyGridState()
     var focusedGridIndex by remember { mutableIntStateOf(0) }
 
+    // BackHandler properly consumes both key event and system back callback
+    BackHandler {
+        if (isSidebarFocused) {
+            onBack()
+        } else {
+            isSidebarFocused = true
+            scope.launch {
+                delay(40)
+                runCatching { rootFocusRequester.requestFocus() }
+            }
+        }
+    }
+
     // Keep the focused card in view with smooth animated scrolling.
     LaunchedEffect(focusedGridIndex, uiState.items.size) {
         if (uiState.items.isEmpty()) return@LaunchedEffect
@@ -192,7 +206,8 @@ fun WatchlistScreen(
                     }
 
                     when (event.key) {
-                        Key.Back, Key.Escape -> {
+                        // Key.Back handled by BackHandler — not here
+                        Key.Escape -> {
                             if (isSidebarFocused) {
                                 onBack()
                             } else {
@@ -353,7 +368,8 @@ fun WatchlistScreen(
                                 .onKeyEvent { event ->
                                     if (event.type == KeyEventType.KeyDown) {
                                         when (event.key) {
-                                            Key.Back, Key.Escape -> {
+                                            // Key.Back handled by BackHandler — not here
+                                            Key.Escape -> {
                                                 isSidebarFocused = true
                                                 scope.launch {
                                                     delay(40)

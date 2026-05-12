@@ -1,8 +1,11 @@
 package com.streame.tv.data.repository
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.streame.tv.data.local.ProfileDao
+import com.streame.tv.data.local.ProfileEntity
 import com.streame.tv.data.model.Profile
 import com.streame.tv.data.model.ProfileColors
 import com.streame.tv.util.profilesDataStore
@@ -10,10 +13,10 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,6 +24,7 @@ import javax.inject.Singleton
 class ProfileRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val authRepository: AuthRepository,
+    private val profileDao: ProfileDao
 ) {
     private val gson = Gson()
     private val profileListType = object : TypeToken<List<Profile>>() {}.type
@@ -28,17 +32,26 @@ class ProfileRepository @Inject constructor(
     companion object {
         private val PROFILES_KEY = stringPreferencesKey("profiles")
         private val ACTIVE_PROFILE_KEY = stringPreferencesKey("active_profile_id")
+        private const val TAG = "ProfileRepository"
+        private const val MIGRATION_DONE_KEY = "profiles_room_migration_done"
+    }
+
+    init {
+        // One-time migration: copy profiles from DataStore JSON to Room
+        runBlocking {
+            migrateFromDataStoreIfNeeded()
+        }
     }
 
     /**
-     * Flow of all profiles
+     * Flow of all profiles (from Room)
      */
-    val profiles: Flow<List<Profile>> = context.profilesDataStore.data.map { prefs ->
-        decodeProfiles(prefs[PROFILES_KEY])
+    val profiles: Flow<List<Profile>> = profileDao.getAllFlow().map { entities ->
+        entities.map { it.toProfile() }
     }
 
     /**
-     * Flow of the active profile ID
+     * Flow of the active profile ID (still from DataStore — lightweight key)
      */
     val activeProfileId: Flow<String?> = context.profilesDataStore.data.map { prefs ->
         prefs[ACTIVE_PROFILE_KEY]
@@ -47,34 +60,26 @@ class ProfileRepository @Inject constructor(
     /**
      * Flow of the active profile
      */
-    val activeProfile: Flow<Profile?> = context.profilesDataStore.data.map { prefs ->
-        val activeId = prefs[ACTIVE_PROFILE_KEY] ?: return@map null
-        decodeProfiles(prefs[PROFILES_KEY]).find { it.id == activeId }
+    val activeProfile: Flow<Profile?> = combine(
+        profileDao.getAllFlow(),
+        context.profilesDataStore.data.map { prefs -> prefs[ACTIVE_PROFILE_KEY] }
+    ) { entities, activeId ->
+        activeId?.let { id -> entities.find { it.id == id }?.toProfile() }
     }
 
-    /**
-     * Get all profiles (one-shot)
-     */
-    suspend fun getProfiles(): List<Profile> = profiles.first()
+    suspend fun getProfiles(): List<Profile> = profileDao.getAll().map { it.toProfile() }
 
-    /**
-     * Get active profile ID (one-shot)
-     */
-    suspend fun getActiveProfileId(): String? = activeProfileId.first()
+    suspend fun getActiveProfileId(): String? {
+        return context.profilesDataStore.data.first()[ACTIVE_PROFILE_KEY]
+    }
 
-    /**
-     * Get active profile (one-shot)
-     */
-    suspend fun getActiveProfile(): Profile? = activeProfile.first()
+    suspend fun getActiveProfile(): Profile? {
+        val activeId = getActiveProfileId() ?: return null
+        return profileDao.getById(activeId)?.toProfile()
+    }
 
-    /**
-     * Check if profiles exist
-     */
-    suspend fun hasProfiles(): Boolean = getProfiles().isNotEmpty()
+    suspend fun hasProfiles(): Boolean = profileDao.getAll().isNotEmpty()
 
-    /**
-     * Create a new profile
-     */
     suspend fun createProfile(name: String, avatarColor: Long, avatarId: Int = 0, isKidsProfile: Boolean = false): Profile {
         val profile = Profile(
             name = name,
@@ -82,65 +87,35 @@ class ProfileRepository @Inject constructor(
             avatarId = avatarId,
             isKidsProfile = isKidsProfile
         )
-
-        context.profilesDataStore.edit { prefs ->
-            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
-            currentList.add(profile)
-            prefs[PROFILES_KEY] = encodeProfiles(currentList)
-        }
+        profileDao.upsert(profile.toEntity())
         return profile
     }
 
-    /**
-     * Update an existing profile
-     */
     suspend fun updateProfile(profile: Profile) {
-        context.profilesDataStore.edit { prefs ->
-            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
-            val index = currentList.indexOfFirst { it.id == profile.id }
-            if (index >= 0) {
-                currentList[index] = profile
-                prefs[PROFILES_KEY] = encodeProfiles(currentList)
-            }
-        }
+        profileDao.upsert(profile.toEntity())
     }
 
-    /**
-     * Delete a profile
-     */
     suspend fun deleteProfile(profileId: String) {
+        profileDao.delete(profileId)
+        // If we deleted the active profile, clear it
         context.profilesDataStore.edit { prefs ->
-            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
-            currentList.removeAll { it.id == profileId }
-            prefs[PROFILES_KEY] = encodeProfiles(currentList)
-
-            // If we deleted the active profile, clear it
             if (prefs[ACTIVE_PROFILE_KEY] == profileId) {
                 prefs.remove(ACTIVE_PROFILE_KEY)
             }
         }
     }
 
-    /**
-     * Set the active profile
-     */
     suspend fun setActiveProfile(profileId: String) {
         context.profilesDataStore.edit { prefs ->
             prefs[ACTIVE_PROFILE_KEY] = profileId
-
-            // Update lastUsedAt
-            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
-            val index = currentList.indexOfFirst { it.id == profileId }
-            if (index >= 0) {
-                currentList[index] = currentList[index].copy(lastUsedAt = System.currentTimeMillis())
-                prefs[PROFILES_KEY] = encodeProfiles(currentList)
-            }
+        }
+        // Update lastUsedAt
+        val entity = profileDao.getById(profileId)
+        if (entity != null) {
+            profileDao.upsert(entity.copy(lastUsedAt = System.currentTimeMillis()))
         }
     }
 
-    /**
-     * Clear active profile (for switching)
-     */
     suspend fun clearActiveProfile() {
         context.profilesDataStore.edit { prefs ->
             prefs.remove(ACTIVE_PROFILE_KEY)
@@ -151,8 +126,9 @@ class ProfileRepository @Inject constructor(
         profiles: List<Profile>,
         activeProfileId: String?
     ) {
+        profileDao.deleteAll()
+        profileDao.upsertAll(profiles.map { it.toEntity() })
         context.profilesDataStore.edit { prefs ->
-            prefs[PROFILES_KEY] = gson.toJson(profiles)
             if (!activeProfileId.isNullOrBlank() && profiles.any { it.id == activeProfileId }) {
                 prefs[ACTIVE_PROFILE_KEY] = activeProfileId
             } else if (profiles.isNotEmpty()) {
@@ -163,10 +139,6 @@ class ProfileRepository @Inject constructor(
         }
     }
 
-
-    /**
-     * Create a default profile if none exist
-     */
     suspend fun createDefaultProfileIfNeeded(): Profile? {
         if (hasProfiles()) return null
         return createProfile(
@@ -175,51 +147,71 @@ class ProfileRepository @Inject constructor(
         )
     }
 
-    /**
-     * Link a cloud account (Supabase user) to a local profile.
-     * Each profile can have its own independent cloud account.
-     */
     suspend fun linkCloudAccount(profileId: String, cloudUserId: String, cloudEmail: String) {
-        context.profilesDataStore.edit { prefs ->
-            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
-            val index = currentList.indexOfFirst { it.id == profileId }
-            if (index >= 0) {
-                currentList[index] = currentList[index].copy(
-                    cloudUserId = cloudUserId,
-                    cloudEmail = cloudEmail
-                )
-                prefs[PROFILES_KEY] = encodeProfiles(currentList)
-            }
-        }
+        val entity = profileDao.getById(profileId) ?: return
+        profileDao.upsert(entity.copy(cloudUserId = cloudUserId, cloudEmail = cloudEmail))
+    }
+
+    suspend fun clearCloudLink(profileId: String) {
+        val entity = profileDao.getById(profileId) ?: return
+        profileDao.upsert(entity.copy(cloudUserId = null, cloudEmail = null))
     }
 
     /**
-     * Clear the cloud account link from a profile.
+     * One-time migration: reads the JSON blob from DataStore and inserts
+     * all profiles into Room. Runs only once (guarded by a flag in DataStore).
      */
-    suspend fun clearCloudLink(profileId: String) {
-        context.profilesDataStore.edit { prefs ->
-            val currentList = decodeProfiles(prefs[PROFILES_KEY]).toMutableList()
-            val index = currentList.indexOfFirst { it.id == profileId }
-            if (index >= 0) {
-                currentList[index] = currentList[index].copy(
-                    cloudUserId = null,
-                    cloudEmail = null
-                )
-                prefs[PROFILES_KEY] = encodeProfiles(currentList)
+    private suspend fun migrateFromDataStoreIfNeeded() {
+        val prefs = context.profilesDataStore.data.first()
+        if (prefs[stringPreferencesKey(MIGRATION_DONE_KEY)] == "true") return
+
+        val json = prefs[PROFILES_KEY]
+        if (!json.isNullOrBlank()) {
+            val oldProfiles = try {
+                gson.fromJson<List<Profile>>(json, profileListType) ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+            if (oldProfiles.isNotEmpty()) {
+                profileDao.upsertAll(oldProfiles.map { it.toEntity() })
+                Log.i(TAG, "Migrated ${oldProfiles.size} profiles from DataStore to Room")
             }
         }
-    }
 
-    private fun decodeProfiles(json: String?): List<Profile> {
-        if (json.isNullOrBlank()) return emptyList()
-        return try {
-            gson.fromJson<List<Profile>>(json, profileListType) ?: emptyList()
-        } catch (_: Exception) {
-            emptyList()
+        // Mark migration as done
+        context.profilesDataStore.edit { prefs ->
+            prefs[stringPreferencesKey(MIGRATION_DONE_KEY)] = "true"
         }
     }
 
-    private fun encodeProfiles(profiles: List<Profile>): String {
-        return gson.toJson(profiles, profileListType)
-    }
+    // ── Mappers ──────────────────────────────────────────────
+
+    private fun ProfileEntity.toProfile() = Profile(
+        id = id,
+        name = name,
+        avatarColor = avatarColor,
+        avatarId = avatarId,
+        isKidsProfile = isKidsProfile,
+        pin = pin,
+        isLocked = isLocked,
+        createdAt = createdAt,
+        lastUsedAt = lastUsedAt,
+        cloudUserId = cloudUserId,
+        cloudEmail = cloudEmail
+    )
+
+    private fun Profile.toEntity() = ProfileEntity(
+        id = id,
+        name = name,
+        avatarColor = avatarColor,
+        avatarId = avatarId,
+        isKidsProfile = isKidsProfile,
+        pin = pin,
+        isLocked = isLocked,
+        createdAt = createdAt,
+        lastUsedAt = lastUsedAt,
+        cloudUserId = cloudUserId,
+        cloudEmail = cloudEmail
+    )
 }

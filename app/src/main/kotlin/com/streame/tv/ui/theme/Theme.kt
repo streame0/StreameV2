@@ -7,6 +7,8 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
 import com.streame.tv.ui.skin.ProvideStreameSkin
+import com.streame.tv.ui.skin.StreameSkinTokens
+import androidx.compose.ui.graphics.Color
 
 /**
  * Streame Color scheme holder - Arctic Fuse 2 inspired
@@ -70,44 +72,111 @@ data class StreameColors(
 val LocalStreameColors = staticCompositionLocalOf { StreameColors() }
 
 /**
+ * Theme variant names — persisted in DataStore.
+ */
+enum class ThemeVariant(val key: String) {
+    ARCTIC("arctic"),
+    OLED("oled"),
+    DIMMER("dimmer");
+
+    fun toSkinTokens(): StreameSkinTokens = when (this) {
+        ARCTIC -> StreameSkinTokens.defaults()
+        OLED -> StreameSkinTokens.oled()
+        DIMMER -> StreameSkinTokens.dimmer()
+    }
+}
+
+/**
  * Main Streame TV theme - Arctic Fuse 2 inspired
- * Pure black background, light gray text, white focus states
+ * Supports theme variants: Arctic (default), OLED (true black), Dimmer (low contrast)
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun StreameTvTheme(
+    variant: ThemeVariant = ThemeVariant.ARCTIC,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = darkColorScheme(
-        primary = ArcticWhite,
-        onPrimary = ArcticBlack,
-        primaryContainer = ArcticGray,
-        onPrimaryContainer = ArcticWhite,
-        secondary = ArcticWhite70,
-        onSecondary = ArcticBlack,
-        secondaryContainer = ArcticGray,
-        onSecondaryContainer = ArcticWhite,
-        tertiary = AccentWhite,
-        onTertiary = ArcticBlack,
-        tertiaryContainer = ArcticGray,
-        onTertiaryContainer = ArcticWhite,
-        background = BackgroundDark,
-        onBackground = TextPrimary,
-        surface = BackgroundCard,
-        onSurface = TextPrimary,
-        surfaceVariant = SurfaceVariant,
-        onSurfaceVariant = TextSecondary,
-        error = ErrorRed,
-        onError = ArcticWhite,
-        border = BorderLight
-    )
+    val skinTokens = variant.toSkinTokens()
 
-    val StreameColors = StreameColors()
+    // Adjust Material color scheme based on variant
+    val colorScheme = when (variant) {
+        ThemeVariant.OLED -> darkColorScheme(
+            primary = ArcticWhite,
+            onPrimary = ArcticBlack,
+            primaryContainer = Color(0xFF0A0A0A),
+            onPrimaryContainer = ArcticWhite,
+            secondary = ArcticWhite70,
+            onSecondary = ArcticBlack,
+            secondaryContainer = Color(0xFF0A0A0A),
+            onSecondaryContainer = ArcticWhite,
+            tertiary = AccentWhite,
+            onTertiary = ArcticBlack,
+            tertiaryContainer = Color(0xFF0A0A0A),
+            onTertiaryContainer = ArcticWhite,
+            background = Color(0xFF000000),
+            onBackground = TextPrimary,
+            surface = Color(0xFF000000),
+            onSurface = TextPrimary,
+            surfaceVariant = Color(0xFF0A0A0A),
+            onSurfaceVariant = TextSecondary,
+            error = ErrorRed,
+            onError = ArcticWhite,
+            border = BorderLight
+        )
+        ThemeVariant.DIMMER -> darkColorScheme(
+            primary = Color(0xFFBFBFBF),
+            onPrimary = ArcticBlack,
+            primaryContainer = Color(0xFF1A1A1A),
+            onPrimaryContainer = Color(0xFFBFBFBF),
+            secondary = Color(0x80BFBFBF),
+            onSecondary = ArcticBlack,
+            secondaryContainer = Color(0xFF1A1A1A),
+            onSecondaryContainer = Color(0xFFBFBFBF),
+            tertiary = Color(0xFFD4D4D4),
+            onTertiary = ArcticBlack,
+            tertiaryContainer = Color(0xFF1A1A1A),
+            onTertiaryContainer = Color(0xFFBFBFBF),
+            background = Color(0xFF08090A),
+            onBackground = Color(0xFFBFBFBF),
+            surface = Color(0xFF0F0F0F),
+            onSurface = Color(0xFFBFBFBF),
+            surfaceVariant = Color(0xFF0F0F0F),
+            onSurfaceVariant = Color(0x80BFBFBF),
+            error = ErrorRed,
+            onError = Color(0xFFBFBFBF),
+            border = BorderLight
+        )
+        else -> darkColorScheme(
+            primary = ArcticWhite,
+            onPrimary = ArcticBlack,
+            primaryContainer = ArcticGray,
+            onPrimaryContainer = ArcticWhite,
+            secondary = ArcticWhite70,
+            onSecondary = ArcticBlack,
+            secondaryContainer = ArcticGray,
+            onSecondaryContainer = ArcticWhite,
+            tertiary = AccentWhite,
+            onTertiary = ArcticBlack,
+            tertiaryContainer = ArcticGray,
+            onTertiaryContainer = ArcticWhite,
+            background = BackgroundDark,
+            onBackground = TextPrimary,
+            surface = BackgroundCard,
+            onSurface = TextPrimary,
+            surfaceVariant = SurfaceVariant,
+            onSurfaceVariant = TextSecondary,
+            error = ErrorRed,
+            onError = ArcticWhite,
+            border = BorderLight
+        )
+    }
+
+    val streameColors = StreameColors()
 
     CompositionLocalProvider(
-        LocalStreameColors provides StreameColors
+        LocalStreameColors provides streameColors
     ) {
-        ProvideStreameSkin {
+        ProvideStreameSkin(tokens = skinTokens) {
             MaterialTheme(
                 colorScheme = colorScheme,
                 content = content

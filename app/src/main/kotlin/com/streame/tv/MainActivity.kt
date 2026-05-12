@@ -119,6 +119,7 @@ import com.streame.tv.navigation.Screen
 import com.streame.tv.ui.screens.login.LoginScreen
 import com.streame.tv.ui.startup.StartupViewModel
 import com.streame.tv.ui.theme.StreameTvTheme
+import com.streame.tv.ui.theme.ThemeVariant
 import com.streame.tv.ui.theme.BackgroundGradientCenter
 import com.streame.tv.ui.theme.BackgroundGradientEnd
 import com.streame.tv.ui.theme.BackgroundGradientStart
@@ -281,6 +282,16 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(appLanguage) {
                 mediaRepository.get().contentLanguage = if (appLanguage == "en-US") null else appLanguage
             }
+            // Theme variant (Arctic / OLED / Dimmer) from DataStore
+            val THEME_VARIANT_KEY = stringPreferencesKey("theme_variant")
+            val themeVariantKey by remember {
+                this@MainActivity.settingsDataStore.data.map { prefs ->
+                    prefs[THEME_VARIANT_KEY] ?: "arctic"
+                }
+            }.collectAsStateWithLifecycle(initialValue = "arctic")
+            val themeVariant = remember(themeVariantKey) {
+                ThemeVariant.entries.find { it.key == themeVariantKey } ?: ThemeVariant.ARCTIC
+            }
             val deviceType = when (deviceModeOverride) {
                 "tv" -> DeviceType.TV
                 "tablet" -> DeviceType.TABLET
@@ -317,7 +328,7 @@ class MainActivity : ComponentActivity() {
                     if (isRtl) androidx.compose.ui.unit.LayoutDirection.Rtl
                     else androidx.compose.ui.unit.LayoutDirection.Ltr
             ) {
-                StreameTvTheme {
+                StreameTvTheme(variant = themeVariant) {
                     val startupState by startupViewModel.state.collectAsStateWithLifecycle()
                     StreameApp(
                         authRepository = authRepository.get(),

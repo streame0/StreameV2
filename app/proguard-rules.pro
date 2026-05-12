@@ -108,23 +108,30 @@
 -dontwarn org.jellyfin.media3.**
 
 # ============================================
-# Hilt / Dagger - KEEP EVERYTHING
+# Hilt / Dagger
 # ============================================
-# Keep ALL app classes to prevent Hilt/Dagger issues
--keep class com.streame.tv.** { *; }
--keep interface com.streame.tv.** { *; }
-
-# Keep ALL Dagger/Hilt classes and generated code
--keep class dagger.** { *; }
--keep class javax.inject.** { *; }
+# Keep Hilt entry points and injected classes
 -keep class dagger.hilt.** { *; }
 -keep class dagger.hilt.internal.** { *; }
 -keep class dagger.hilt.android.** { *; }
 -keep class dagger.hilt.android.internal.** { *; }
-
-# Keep Hilt aggregated deps (generated classes)
 -keep class hilt_aggregated_deps.** { *; }
 -keep interface hilt_aggregated_deps.** { *; }
+
+# Keep classes with @Inject constructors (Hilt needs these at runtime)
+-keepclassmembers class * {
+    @javax.inject.Inject <init>(...);
+}
+
+# Keep Hilt modules and entry points
+-keep @dagger.hilt.android.lifecycle.HiltViewModel class * { *; }
+-keep @dagger.hilt.EntryPoint class * { *; }
+-keep @dagger.Module class * { *; }
+-keep @dagger.hilt.InstallIn class * { *; }
+
+# Keep Hilt Worker subclasses
+-keep class * extends androidx.work.CoroutineWorker { *; }
+-keep @dagger.hilt.android.lifecycle.HiltWorker class * { *; }
 
 # Suppress warnings for Hilt generated classes
 -dontwarn com.streame.tv.**_GeneratedInjector
@@ -149,10 +156,34 @@
 -keep class * extends androidx.lifecycle.AndroidViewModel { *; }
 
 # ============================================
-# Supabase / Ktor / Google Sign-In
+# Supabase / Kotlin Serialization
 # ============================================
-# Removed: Supabase and Google Sign-In are no longer used.
-# Trakt is the only cloud service.
+# Keep Supabase models (used by Kotlin Serialization reflection)
+-keep class com.streame.tv.data.remote.supabase.** { *; }
+-keepclassmembers class com.streame.tv.data.remote.supabase.** {
+    <fields>;
+}
+
+# ============================================
+# Room entities — keep fields for reflection-based mapping
+# ============================================
+-keep class com.streame.tv.data.local.HomeRowEntity { *; }
+-keep class com.streame.tv.data.local.CatalogConfigEntity { *; }
+-keep class com.streame.tv.data.local.WatchHistoryEntity { *; }
+-keep class com.streame.tv.data.local.SyncQueueEntity { *; }
+-keep class com.streame.tv.data.local.WatchlistEntity { *; }
+
+# ============================================
+# App sealed classes and state classes
+# ============================================
+-keep class com.streame.tv.data.repository.AuthState { *; }
+-keep class com.streame.tv.data.repository.AuthState$* { *; }
+-keep class com.streame.tv.data.repository.SupabaseAuthState { *; }
+-keep class com.streame.tv.data.repository.SupabaseAuthState$* { *; }
+-keep class com.streame.tv.data.sync.CloudSyncScope { *; }
+-keep class com.streame.tv.data.sync.CloudSyncStatus { *; }
+-keep class com.streame.tv.data.model.MediaType { *; }
+-keep class com.streame.tv.util.DeviceType { *; }
 
 # ============================================
 # Firebase Crashlytics

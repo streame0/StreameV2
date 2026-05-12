@@ -27,9 +27,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import coil.size.Precision
+import coil3.compose.AsyncImage
+import coil3.request.*
+import coil3.size.Precision
 import androidx.compose.ui.platform.LocalContext
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType

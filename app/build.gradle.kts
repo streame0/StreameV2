@@ -34,8 +34,8 @@ android {
         // Force Hilt Application classes into the primary DEX so they're
         // available during the very first moments of process startup.
         multiDexKeepProguard = file("multidex-config.pro")
-        versionCode = 2
-        versionName = "1.2"
+        versionCode = 3
+        versionName = "1.3"
         buildConfigField("String", "GITHUB_OWNER", "\"streame0\"")
         buildConfigField("String", "GITHUB_REPO", "\"StreameV2\"")
         buildConfigField("String", "SUPABASE_URL", "\"${localSecretValue("SUPABASE_URL")}\"")
@@ -265,10 +265,12 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // Image loading - Coil
-    implementation("io.coil-kt:coil-compose:2.5.0")
-    implementation("io.coil-kt:coil-gif:2.5.0")
-    implementation("io.coil-kt:coil-svg:2.5.0")
+    // Image loading - Coil 3.x
+    implementation("io.coil-kt.coil3:coil:3.0.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.0.0")
+    implementation("io.coil-kt.coil3:coil-gif:3.0.0")
+    implementation("io.coil-kt.coil3:coil-svg:3.0.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
     implementation("com.google.zxing:core:3.5.3")
 
     implementation("org.conscrypt:conscrypt-android:2.5.2")
@@ -311,9 +313,13 @@ dependencies {
     implementation(platform("io.github.jan-tennert.supabase:bom:3.1.4"))
     implementation("io.github.jan-tennert.supabase:auth-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("io.github.jan-tennert.supabase:realtime-kt")
     implementation("io.ktor:ktor-client-okhttp:3.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.russhwolf:multiplatform-settings:1.3.0")
+
+    // AndroidX Security — encrypted shared preferences for auth tokens
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     baselineProfile(project(":benchmark"))
 
@@ -324,6 +330,8 @@ dependencies {
     testImplementation("app.cash.turbine:turbine:1.0.0")  // Flow testing
     testImplementation("com.google.truth:truth:1.1.5")    // Better assertions
     testImplementation("org.robolectric:robolectric:4.11.1")  // Android mocking
+    testImplementation("androidx.room:room-testing:2.6.1")
+    testImplementation("androidx.datastore:datastore-preferences-core:1.0.0")
 
     // Android Instrumented Testing
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.06.00"))

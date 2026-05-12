@@ -55,7 +55,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
 import androidx.tv.foundation.lazy.grid.itemsIndexed
 import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.streame.tv.data.model.CatalogConfig
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType

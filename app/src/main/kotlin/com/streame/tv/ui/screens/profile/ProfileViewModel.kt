@@ -11,6 +11,7 @@ import com.streame.tv.data.repository.WatchHistoryRepository
 import com.streame.tv.data.repository.WatchlistRepository
 import com.streame.tv.domain.repository.SyncRepository
 import com.streame.tv.ui.components.ToastType
+import com.streame.tv.util.AppLogger
 import com.streame.tv.util.PinUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -381,7 +382,9 @@ class ProfileViewModel @Inject constructor(
             try {
                 val profileIndex = _uiState.value.profiles.indexOf(profile).takeIf { it >= 0 } ?: 0
                 syncRepository.setProfilePin(profileIndex + 1, pin, null)
-            } catch (_: Exception) { /* non-fatal */ }
+            } catch (e: Exception) {
+                AppLogger.e("ProfileVM", "Failed to sync PIN to cloud", e)
+            }
         }
     }
 
@@ -395,7 +398,9 @@ class ProfileViewModel @Inject constructor(
             try {
                 val profileIndex = _uiState.value.profiles.indexOf(profile).takeIf { it >= 0 } ?: 0
                 syncRepository.clearProfilePin(profileIndex + 1, null)
-            } catch (_: Exception) { /* non-fatal */ }
+            } catch (e: Exception) {
+                AppLogger.e("ProfileVM", "Failed to sync PIN removal to cloud", e)
+            }
         }
     }
 }

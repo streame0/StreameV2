@@ -231,6 +231,9 @@ class TraktSyncService @Inject constructor(
 
             flushOutbox()
 
+            // Save sync timestamp for incremental sync baseline
+            saveLastSyncAt(Instant.now().toString())
+
             _syncProgress.value = SyncProgress(
                 status = SyncStatus.COMPLETED,
                 message = "Sync completed!",
@@ -256,12 +259,229 @@ class TraktSyncService @Inject constructor(
     }
 
     /**
-     * Perform incremental sync — without Supabase sync state, this
-     * just delegates to full sync. Could be optimized later with local
-     * last-activities tracking.
+     * Perform incremental sync using Trakt's last_activities endpoint.
+     *
+     * Compares remote last_activities timestamps with the locally stored
+     * last_sync_at. If nothing changed since the last sync, skips entirely.
+     * If only watched items changed, fetches only history items since
+     * last_sync_at instead of all watched movies/episodes/playback.
+     *
+     * Falls back to full sync if no previous sync timestamp exists.
      */
     suspend fun performIncrementalSync(): SyncResult = withContext(Dispatchers.IO) {
-        performFullSync()
+        if (_isSyncing.value) {
+            return@withContext SyncResult.Error("Sync already in progress")
+        }
+
+        val lastSyncAt = loadLastSyncAt()
+        if (lastSyncAt == null) {
+            // Never synced before — need full sync
+            return@withContext performFullSync()
+        }
+
+        _isSyncing.value = true
+        _syncProgress.value = SyncProgress(status = SyncStatus.STARTING, message = "Checking for changes...")
+
+        try {
+            val lastActivities = executeTraktCall("last activities") { auth ->
+                traktApi.getLastActivities(auth, clientId)
+            }
+
+            // Check if anything relevant changed since last sync
+            val remoteWatchedAt = latestOf(
+                lastActivities.movies?.watchedAt,
+                lastActivities.episodes?.watchedAt
+            )
+            val remoteWatchlistedAt = lastActivities.watchlist?.watchlistedAt
+            val remotePausedAt = lastActivities.movies?.pausedAt
+
+            val hasWatchedChanges = isAfter(remoteWatchedAt, lastSyncAt)
+            val hasWatchlistChanges = isAfter(remoteWatchlistedAt, lastSyncAt)
+            val hasPlaybackChanges = isAfter(remotePausedAt, lastSyncAt)
+
+            if (!hasWatchedChanges && !hasWatchlistChanges && !hasPlaybackChanges) {
+                // Nothing changed — flush outbox and return
+                flushOutbox()
+                _syncProgress.value = SyncProgress(status = SyncStatus.COMPLETED, message = "Already up to date")
+                _syncEvents.tryEmit(SyncStatus.COMPLETED)
+                _isSyncing.value = false
+                return@withContext SyncResult.Success(0, 0)
+            }
+
+            val userId = getUserId()
+            val localUserId = userId ?: "local"
+            val completionThreshold = Constants.WATCHED_THRESHOLD / 100f
+            var totalMovies = 0
+            var totalEpisodes = 0
+
+            if (hasWatchedChanges) {
+                _syncProgress.value = SyncProgress(
+                    status = SyncStatus.SYNCING_MOVIES,
+                    message = "Fetching recent watched changes..."
+                )
+
+                // Fetch only history items since last sync — much lighter than full watched query
+                val historyMovies = fetchAllHistoryMovies(startAt = lastSyncAt)
+                val historyEpisodes = fetchAllHistoryEpisodes(startAt = lastSyncAt)
+
+                totalMovies = historyMovies.size
+                totalEpisodes = historyEpisodes.size
+
+                // Build records from history items
+                val movieRecords = historyMovies.mapNotNull { item ->
+                    val tmdbId = item.movie?.ids?.tmdb ?: return@mapNotNull null
+                    WatchedMovieRecord(
+                        userId = localUserId,
+                        profileId = activeProfileId(),
+                        showTmdbId = tmdbId,
+                        showTraktId = item.movie.ids.trakt,
+                        watched = true,
+                        watchedAt = item.watchedAt,
+                        updatedAt = item.watchedAt,
+                        source = profileHistorySource("trakt_incremental"),
+                        title = item.movie.title
+                    )
+                }
+
+                val episodeRecords = historyEpisodes.mapNotNull { item ->
+                    val tmdbId = item.show?.ids?.tmdb ?: return@mapNotNull null
+                    WatchedEpisodeRecord(
+                        userId = localUserId,
+                        profileId = activeProfileId(),
+                        showTmdbId = tmdbId,
+                        showTraktId = item.show.ids.trakt,
+                        season = item.episode?.season,
+                        episode = item.episode?.number,
+                        traktEpisodeId = item.episode?.ids?.trakt,
+                        tmdbEpisodeId = item.episode?.ids?.tmdb,
+                        watched = true,
+                        watchedAt = item.watchedAt,
+                        updatedAt = item.watchedAt,
+                        source = profileHistorySource("trakt_incremental"),
+                        title = item.show.title,
+                        episodeTitle = item.episode?.title
+                    )
+                }
+
+                // Persist incremental records to DataStore
+                persistIncrementalWatchedMovies(movieRecords)
+                persistIncrementalWatchedEpisodes(episodeRecords)
+
+                _syncProgress.value = SyncProgress(
+                    status = SyncStatus.SYNCING_PROGRESS,
+                    message = "Fetching playback progress...",
+                    moviesProcessed = totalMovies,
+                    totalMovies = totalMovies,
+                    episodesProcessed = totalEpisodes,
+                    totalEpisodes = totalEpisodes
+                )
+            }
+
+            if (hasPlaybackChanges) {
+                val playbackItems = fetchAllPlaybackProgress()
+                val progressRecords = buildWatchHistoryFromPlayback(
+                    localUserId,
+                    playbackItems,
+                    completionThreshold,
+                    profileHistorySource("trakt_incremental")
+                )
+                // Playback data is written via DataStore edits in buildWatchHistoryFromPlayback
+            }
+
+            flushOutbox()
+
+            // Update last sync timestamp
+            saveLastSyncAt(Instant.now().toString())
+
+            _syncProgress.value = SyncProgress(
+                status = SyncStatus.COMPLETED,
+                message = "Incremental sync completed!",
+                moviesProcessed = totalMovies,
+                totalMovies = totalMovies,
+                episodesProcessed = totalEpisodes,
+                totalEpisodes = totalEpisodes
+            )
+            _syncEvents.tryEmit(SyncStatus.COMPLETED)
+
+            SyncResult.Success(totalMovies, totalEpisodes)
+        } catch (e: Exception) {
+            _syncProgress.value = SyncProgress(
+                status = SyncStatus.ERROR,
+                message = "Incremental sync failed: ${e.message}"
+            )
+            SyncResult.Error(e.message ?: "Unknown error")
+        } finally {
+            _isSyncing.value = false
+        }
+    }
+
+    private fun latestOf(vararg timestamps: String?): String? {
+        return timestamps.filterNotNull().maxWithOrNull(compareBy { it })
+    }
+
+    private fun lastSyncAtKey() = profileManager.profileStringKey("trakt_last_sync_at")
+
+    private suspend fun loadLastSyncAt(): String? {
+        val prefs = context.traktDataStore.data.first()
+        return prefs[lastSyncAtKey()]
+    }
+
+    private suspend fun saveLastSyncAt(timestamp: String) {
+        context.traktDataStore.edit { prefs ->
+            prefs[lastSyncAtKey()] = timestamp
+        }
+    }
+
+    private suspend fun persistIncrementalWatchedMovies(records: List<WatchedMovieRecord>) {
+        if (records.isEmpty()) return
+        val prefs = context.traktDataStore.data.first()
+        val key = profileManager.profileStringKey("trakt_watched_movies_v2")
+        val existingJson = prefs[key]
+        val existing: MutableList<WatchedMovieRecord> = if (existingJson != null) {
+            try {
+                val type = com.google.gson.reflect.TypeToken.getParameterized(MutableList::class.java, WatchedMovieRecord::class.java).type
+                gson.fromJson<MutableList<WatchedMovieRecord>>(existingJson, type) ?: mutableListOf()
+            } catch (e: Exception) {
+                mutableListOf()
+            }
+        } else mutableListOf()
+
+        // Merge: overwrite existing entries for the same tmdbId, add new ones
+        val existingMap = existing.associateBy { it.showTmdbId }.toMutableMap()
+        for (record in records) {
+            existingMap[record.showTmdbId] = record
+        }
+        val merged = existingMap.values.toList()
+
+        context.traktDataStore.edit { prefs ->
+            prefs[key] = gson.toJson(merged)
+        }
+    }
+
+    private suspend fun persistIncrementalWatchedEpisodes(records: List<WatchedEpisodeRecord>) {
+        if (records.isEmpty()) return
+        val prefs = context.traktDataStore.data.first()
+        val key = profileManager.profileStringKey("trakt_watched_episodes_v2")
+        val existingJson = prefs[key]
+        val existing: MutableList<WatchedEpisodeRecord> = if (existingJson != null) {
+            try {
+                val type = com.google.gson.reflect.TypeToken.getParameterized(MutableList::class.java, WatchedEpisodeRecord::class.java).type
+                gson.fromJson<MutableList<WatchedEpisodeRecord>>(existingJson, type) ?: mutableListOf()
+            } catch (e: Exception) {
+                mutableListOf()
+            }
+        } else mutableListOf()
+
+        // Merge: overwrite existing entries for the same show+season+episode, add new ones
+        val existingMap = existing.associateBy { "${it.showTmdbId}:${it.season}:${it.episode}" }.toMutableMap()
+        for (record in records) {
+            existingMap["${record.showTmdbId}:${record.season}:${record.episode}"] = record
+        }
+        val merged = existingMap.values.toList()
+
+        context.traktDataStore.edit { prefs ->
+            prefs[key] = gson.toJson(merged)
+        }
     }
 
     /**

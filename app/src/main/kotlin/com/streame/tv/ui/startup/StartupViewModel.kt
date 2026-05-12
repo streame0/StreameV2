@@ -3,10 +3,10 @@ package com.streame.tv.ui.startup
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import coil.ImageLoader
-import coil.imageLoader
-import coil.request.ImageRequest
-import coil.size.Precision
+import coil3.ImageLoader
+import coil3.imageLoader
+import coil3.request.*
+import coil3.size.Precision
 import com.streame.tv.data.model.Category
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.repository.MediaRepository

@@ -1,6 +1,7 @@
 package com.streame.tv.data.local
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
 import com.google.gson.Gson
@@ -58,13 +59,21 @@ data class CatalogConfigEntity(
  * Room entity for watch history / continue watching.
  * Replaces the complex Supabase-query-per-screen pattern with a local table.
  */
-@Entity(tableName = "watch_history")
+@Entity(
+    tableName = "watch_history",
+    indices = [
+        Index(value = ["profileId"]),
+        Index(value = ["tmdbId", "mediaType"]),
+        Index(value = ["updatedAt"])
+    ]
+)
 data class WatchHistoryEntity(
     @PrimaryKey(autoGenerate = true) val rowId: Long = 0,
+    val userId: String = "",
     val profileId: String,
     val mediaType: String, // "movie" or "tv"
     val tmdbId: Int,
-    val title: String,
+    val title: String = "",
     val posterPath: String?,
     val backdropPath: String?,
     val season: Int?,
@@ -74,6 +83,9 @@ data class WatchHistoryEntity(
     val durationSeconds: Long,
     val positionSeconds: Long,
     val updatedAt: Long = System.currentTimeMillis(),
+    val source: String? = null,
+    val videoId: String? = null,
+    val progressKey: String? = null,
     // Last-played source info for same-source resume
     val lastAddonId: String? = null,
     val lastSourceName: String? = null,

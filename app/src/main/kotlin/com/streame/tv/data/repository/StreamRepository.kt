@@ -2,6 +2,7 @@ package com.streame.tv.data.repository
 
 import android.content.Context
 import android.util.Log
+import com.streame.tv.util.AppLogger
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -1077,7 +1078,8 @@ class StreamRepository @Inject constructor(
                     }
                 }
                 ?.distinctBy { it.url.lowercase(Locale.US) }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.e("StreamRepo", "Failed to load CloudStream repositories", e)
             null
         }
     }
@@ -2770,7 +2772,8 @@ class StreamRepository @Inject constructor(
                         true
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppLogger.e("StreamRepo", "URL validation failed", e)
                 false
             }
         }
@@ -3259,7 +3262,9 @@ class StreamRepository @Inject constructor(
                 .filter { it.runtimeKind == RuntimeKind.STREMIO }
                 .mapNotNull { it.url }
             addonSyncService.pushToRemote(urls)
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            AppLogger.e("StreamRepo", "Failed to push addons to remote", e)
+        }
     }
 }
 

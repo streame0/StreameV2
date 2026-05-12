@@ -115,11 +115,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
-import coil.ImageLoader
-import coil.compose.AsyncImage
-import coil.decode.SvgDecoder
-import coil.request.ImageRequest
-import coil.size.Precision
+import coil3.ImageLoader
+import coil3.compose.AsyncImage
+import coil3.svg.SvgDecoder
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.*
+import coil3.size.Precision
 import com.streame.tv.data.model.Category
 import com.streame.tv.data.model.CatalogConfig
 import com.streame.tv.data.model.CollectionTileShape
@@ -596,6 +597,15 @@ fun HomeScreen(
         showContextMenu = false
         contextMenuItem = null
         contextMenuIsContinueWatching = false
+    }
+
+    // Default back: exit app if sidebar focused, otherwise focus sidebar
+    BackHandler(enabled = !showContextMenu) {
+        if (focusState.isSidebarFocused) {
+            onExitApp()
+        } else {
+            focusState.isSidebarFocused = true
+        }
     }
 
     // Preload logos for current and next rows when row changes
@@ -1085,9 +1095,10 @@ private fun HeroSection(
     val context = LocalContext.current
     val metadataLogoImageLoader = remember(context) {
         ImageLoader.Builder(context)
-            .okHttpClient(OkHttpProvider.coilClient)
-            .components { add(SvgDecoder.Factory()) }
-            .crossfade(false)
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { OkHttpProvider.coilClient }))
+                add(SvgDecoder.Factory())
+            }
             .build()
     }
     val density = LocalDensity.current
@@ -1491,9 +1502,10 @@ private fun MobileHeroOverlay(
     val context = LocalContext.current
     val metadataLogoImageLoader = remember(context) {
         ImageLoader.Builder(context)
-            .okHttpClient(OkHttpProvider.coilClient)
-            .components { add(SvgDecoder.Factory()) }
-            .crossfade(false)
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { OkHttpProvider.coilClient }))
+                add(SvgDecoder.Factory())
+            }
             .build()
     }
     val mobileHeroGradient = remember {
@@ -1710,9 +1722,10 @@ private fun MobileHeroCarousel(
     val context = LocalContext.current
     val metadataLogoImageLoader = remember(context) {
         ImageLoader.Builder(context)
-            .okHttpClient(OkHttpProvider.coilClient)
-            .components { add(SvgDecoder.Factory()) }
-            .crossfade(false)
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { OkHttpProvider.coilClient }))
+                add(SvgDecoder.Factory())
+            }
             .build()
     }
     val configuration = LocalConfiguration.current
@@ -2246,7 +2259,8 @@ private fun HomeInputLayer(
                             true
                         }
                     }
-                        Key.Back, Key.Escape -> {
+                        // Key.Back handled by BackHandler — not here
+                        Key.Escape -> {
                             selectPressedInHome = false
                             selectDownAtMs = 0L
                             if (focusState.isSidebarFocused) {

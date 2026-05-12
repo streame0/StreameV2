@@ -7,33 +7,33 @@ class AppExceptionTest {
 
     @Test
     fun `Network exception is retryable`() {
-        assertThat(AppException.Network.NO_CONNECTION.isRetryable()).isTrue()
-        assertThat(AppException.Network.TIMEOUT.isRetryable()).isTrue()
-        assertThat(AppException.Network.SSL_ERROR.isRetryable()).isTrue()
+        assertThat(AppException.Network.NO_CONNECTION.isRetryable).isTrue()
+        assertThat(AppException.Network.TIMEOUT.isRetryable).isTrue()
+        assertThat(AppException.Network.SSL_ERROR.isRetryable).isTrue()
     }
 
     @Test
     fun `Auth exception is not retryable`() {
-        assertThat(AppException.Auth.SESSION_EXPIRED.isRetryable()).isFalse()
-        assertThat(AppException.Auth.INVALID_CREDENTIALS.isRetryable()).isFalse()
-        assertThat(AppException.Auth.ACCESS_DENIED.isRetryable()).isFalse()
+        assertThat(AppException.Auth.SESSION_EXPIRED.isRetryable).isFalse()
+        assertThat(AppException.Auth.INVALID_CREDENTIALS.isRetryable).isFalse()
+        assertThat(AppException.Auth.ACCESS_DENIED.isRetryable).isFalse()
     }
 
     @Test
     fun `Server 5xx errors are retryable`() {
-        assertThat(AppException.Server.internalError().isRetryable()).isTrue()
-        assertThat(AppException.Server.serviceUnavailable().isRetryable()).isTrue()
+        assertThat(AppException.Server.internalError().isRetryable).isTrue()
+        assertThat(AppException.Server.serviceUnavailable().isRetryable).isTrue()
     }
 
     @Test
     fun `Server 4xx errors are not retryable`() {
-        assertThat(AppException.Server.notFound().isRetryable()).isFalse()
-        assertThat(AppException.Server("Bad request", 400).isRetryable()).isFalse()
+        assertThat(AppException.Server.notFound().isRetryable).isFalse()
+        assertThat(AppException.Server("Bad request", 400).isRetryable).isFalse()
     }
 
     @Test
     fun `Unknown exception is not retryable`() {
-        assertThat(AppException.Unknown("weird error").isRetryable()).isFalse()
+        assertThat(AppException.Unknown("weird error").isRetryable).isFalse()
     }
 
     @Test

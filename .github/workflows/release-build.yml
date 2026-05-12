@@ -1,0 +1,46 @@
+name: Release Build Verification
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Release Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Create secrets.defaults.properties
+        run: |
+          cat > secrets.defaults.properties << 'EOF'
+          SUPABASE_URL=https://placeholder.supabase.co
+          SUPABASE_ANON_KEY=placeholder
+          TV_LOGIN_WEB_BASE_URL=https://placeholder.example.com
+          TRAKK_CLIENT_ID=placeholder
+          TRAKK_CLIENT_SECRET=placeholder
+          SENTRY_DSN=
+          EOF
+
+      - name: Lint release
+        run: ./gradlew lintSideloadRelease --no-daemon
+
+      - name: Build release APK
+        run: ./gradlew assembleSideloadRelease --no-daemon
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sideload-release
+          path: app/build/outputs/apk/sideload/release/*.apk

@@ -3,6 +3,7 @@ package com.streame.tv.ui.screens.profile
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -34,6 +37,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -66,18 +74,78 @@ fun PinEntryDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.90f)),
+                .background(Color.Black.copy(alpha = 0.90f))
+                .onKeyEvent { keyEvent ->
+                    if (keyEvent.type != KeyEventType.KeyUp) return@onKeyEvent false
+                    val digit = when (keyEvent.key) {
+                        Key.Zero, Key.NumPad0 -> "0"
+                        Key.One, Key.NumPad1 -> "1"
+                        Key.Two, Key.NumPad2 -> "2"
+                        Key.Three, Key.NumPad3 -> "3"
+                        Key.Four, Key.NumPad4 -> "4"
+                        Key.Five, Key.NumPad5 -> "5"
+                        Key.Six, Key.NumPad6 -> "6"
+                        Key.Seven, Key.NumPad7 -> "7"
+                        Key.Eight, Key.NumPad8 -> "8"
+                        Key.Nine, Key.NumPad9 -> "9"
+                        else -> null
+                    }
+                    when {
+                        digit != null -> {
+                            val currentPin = if (isSetup && isConfirmingSetup) confirmPin else pinInput
+                            if (currentPin.length < 5) {
+                                val newPin = currentPin + digit
+                                if (isSetup && isConfirmingSetup) confirmPin = newPin else pinInput = newPin
+                                errorMessage = ""
+                            }
+                            true
+                        }
+                        keyEvent.key == Key.Backspace -> {
+                            val currentPin = if (isSetup && isConfirmingSetup) confirmPin else pinInput
+                            if (currentPin.isNotEmpty()) {
+                                val newPin = currentPin.dropLast(1)
+                                if (isSetup && isConfirmingSetup) confirmPin = newPin else pinInput = newPin
+                            }
+                            errorMessage = ""
+                            true
+                        }
+                        keyEvent.key == Key.Enter -> {
+                            val current = if (isSetup && isConfirmingSetup) confirmPin else pinInput
+                            if (PinUtil.isValidPin(current)) {
+                                if (isSetup) {
+                                    if (!isConfirmingSetup) {
+                                        isConfirmingSetup = true
+                                    } else if (pinInput == confirmPin) {
+                                        onPinConfirmed(pinInput)
+                                    } else {
+                                        errorMessage = "PINs do not match"
+                                        confirmPin = ""
+                                        isConfirmingSetup = false
+                                    }
+                                } else {
+                                    onPinConfirmed(current)
+                                }
+                            } else {
+                                errorMessage = "PIN must be 4-5 digits"
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
+            val scrollState = rememberScrollState()
             Column(
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF141414))
-                    .padding(40.dp)
-                    .width(300.dp),
+                    .padding(28.dp)
+                    .width(320.dp)
+                    .verticalScroll(scrollState),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -109,6 +177,13 @@ fun PinEntryDialog(
                     },
                     fontSize = 12.sp,
                     color = Color(0xFFB0B0B0),
+                    textAlign = TextAlign.Center
+                )
+
+                Text(
+                    text = "Use remote number keys or on-screen keypad",
+                    fontSize = 10.sp,
+                    color = Color(0xFF808080),
                     textAlign = TextAlign.Center
                 )
 

@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.streame.tv.util.AppLogger
 import com.streame.tv.util.authDataStore
-import com.streame.tv.util.settingsDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,10 +29,8 @@ data class UserProfile(
 )
 
 /**
- * Authentication state
- *
- * Auth is derived from Trakt connection. If Trakt is linked → Authenticated.
- * If not → NotAuthenticated. No email/password or Google Sign-In.
+ * Authentication state for Trakt-based identity.
+ * Supabase auth is handled separately by [AuthManager].
  */
 sealed class AuthState {
     object Loading : AuthState()
@@ -47,17 +44,16 @@ sealed class AuthState {
 }
 
 /**
- * Repository for authentication and user profile management.
+ * Repository for Trakt-based authentication and local user profile management.
  *
- * Trakt IS the auth — no Supabase, no email/password, no Google Sign-In.
  * Auth state is derived from Trakt connection status.
+ * Supabase authentication is managed by [AuthManager].
  */
 @Singleton
 class AuthRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val traktRepositoryProvider: Provider<TraktRepository>
 ) {
-    private val TAG = "AuthRepository"
 
     // DataStore keys
     private object PrefsKeys {
@@ -112,7 +108,7 @@ class AuthRepository @Inject constructor(
                 _authState.value = AuthState.NotAuthenticated
             }
         } catch (e: Exception) {
-            AppLogger.e(TAG, "checkAuthState failed", e)
+            AppLogger.e("AuthRepository", "checkAuthState failed", e)
             _authState.value = AuthState.NotAuthenticated
         }
     }
@@ -135,17 +131,17 @@ class AuthRepository @Inject constructor(
     }
 
     /**
-     * Sign out — disconnects Trakt and clears local data.
+     * Sign out — disconnects Trakt and clears auth data.
+     * Note: Only clears auth-specific DataStore; does NOT wipe user settings.
      */
     suspend fun signOut() {
         try {
             traktRepositoryProvider.get().logout()
         } catch (e: Exception) {
-            AppLogger.e(TAG, "Trakt logout failed", e)
+            AppLogger.e("AuthRepository", "Trakt logout failed", e)
         }
 
         context.authDataStore.edit { prefs -> prefs.clear() }
-        context.settingsDataStore.edit { prefs -> prefs.clear() }
 
         _userProfile.value = null
         _authState.value = AuthState.NotAuthenticated

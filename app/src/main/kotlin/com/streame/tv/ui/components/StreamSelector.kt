@@ -232,7 +232,8 @@ fun StreamSelector(
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown) {
                         when (event.key) {
-                            Key.Back, Key.Escape -> {
+                            // Key.Back handled by BackHandler in DetailsScreen — not here
+                            Key.Escape -> {
                                 onClose()
                                 true
                             }

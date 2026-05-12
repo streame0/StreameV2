@@ -3,7 +3,13 @@ package com.streame.tv.di
 import android.content.Context
 import com.streame.tv.data.api.AniSkipApi
 import com.streame.tv.data.local.AppDatabase
+import com.streame.tv.data.local.DownloadDao
 import com.streame.tv.data.local.HomeRowDao
+import com.streame.tv.data.local.ProfileDao
+import com.streame.tv.data.local.SearchHistoryDao
+import com.streame.tv.data.local.WatchHistoryDao
+import com.streame.tv.data.local.SyncQueueDao
+import com.streame.tv.data.local.WatchlistDao
 import com.streame.tv.data.local.LocalHomeRepository
 import com.streame.tv.data.api.ArmApi
 import com.streame.tv.data.api.IntroDbApi
@@ -191,6 +197,42 @@ object AppModule {
     @Singleton
     fun provideHomeRowDao(database: AppDatabase): HomeRowDao {
         return database.homeRowDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideWatchHistoryDao(database: AppDatabase): WatchHistoryDao {
+        return database.watchHistoryDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideSyncQueueDao(database: AppDatabase): SyncQueueDao {
+        return database.syncQueueDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideWatchlistDao(database: AppDatabase): WatchlistDao {
+        return database.watchlistDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideDownloadDao(database: AppDatabase): DownloadDao {
+        return database.downloadDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideSearchHistoryDao(database: AppDatabase): SearchHistoryDao {
+        return database.searchHistoryDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideProfileDao(database: AppDatabase): ProfileDao {
+        return database.profileDao()
     }
 
     @Provides

@@ -1,7 +1,11 @@
 package com.streame.tv.data.sync
 
 import android.util.Log
+import com.streame.tv.data.local.SyncQueueDao
+import com.streame.tv.data.local.SyncQueueEntity
 import com.streame.tv.data.repository.AuthManager
+import com.streame.tv.data.repository.WatchHistoryRepository
+import com.streame.tv.data.repository.WatchlistRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -10,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import javax.inject.Provider
 import javax.inject.Singleton
 
 private const val TAG = "CloudSyncCoordinator"
@@ -18,22 +23,28 @@ private const val TAG = "CloudSyncCoordinator"
  * Coordinates automatic cloud pushes in response to local data changes.
  *
  * Listens to [CloudSyncInvalidationBus] events and, after a short debounce,
- * triggers a full or targeted push to Supabase. This ensures that local
- * changes (watchlist add, catalog reorder, settings change, etc.) are
- * automatically reflected in the cloud without requiring manual "Force Sync".
+ * triggers a **targeted** push to Supabase for only the changed scope.
+ * This avoids the double-push problem (repo pushes + coordinator pushes)
+ * and reduces API call volume by only pushing what actually changed.
  *
- * The debounce interval varies by scope — watch progress pushes more
- * aggressively (5 s) than catalog changes (15 s) to balance responsiveness
- * with API call volume.
+ * For the most frequent scopes (WATCH_PROGRESS, WATCHLIST), we push only
+ * the changed data. For less frequent scopes, we fall back to
+ * [StartupSyncService.pushAllDataFromRepositories] which pushes everything.
  */
 @Singleton
 class CloudSyncCoordinator @Inject constructor(
     private val invalidationBus: CloudSyncInvalidationBus,
     private val startupSyncService: StartupSyncService,
-    private val authManager: AuthManager
+    private val authManager: AuthManager,
+    private val watchProgressSyncService: WatchProgressSyncService,
+    private val librarySyncService: LibrarySyncService,
+    private val syncQueueDao: SyncQueueDao,
+    private val watchHistoryRepositoryProvider: Provider<WatchHistoryRepository>,
+    private val watchlistRepositoryProvider: Provider<WatchlistRepository>
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var collectorJob: Job? = null
+    private val pendingScopes = mutableSetOf<CloudSyncScope>()
     private var flushJob: Job? = null
 
     @Volatile
@@ -53,6 +64,7 @@ class CloudSyncCoordinator @Inject constructor(
             invalidationBus.events.collectLatest { invalidation ->
                 if (!authManager.isAuthenticated) return@collectLatest
                 isPushDirty = true
+                synchronized(pendingScopes) { pendingScopes.add(invalidation.scope) }
                 scheduleFlush(invalidation)
             }
         }
@@ -70,14 +82,43 @@ class CloudSyncCoordinator @Inject constructor(
     /**
      * Retry a previously failed push. Called from lifecycle ON_RESUME
      * or from the RealtimeSyncManager when the connection is restored.
+     * Drains the offline queue and retries each scope.
      */
     fun retryIfDirty() {
-        if (!isPushDirty || !authManager.isAuthenticated) return
+        if (!authManager.isAuthenticated) return
         scope.launch {
-            Log.d(TAG, "Retrying dirty push")
-            runCatching { startupSyncService.pushAllDataFromRepositories() }
-                .onSuccess { isPushDirty = false }
-                .onFailure { Log.w(TAG, "Dirty push retry failed: ${it.message}") }
+            // First drain the offline queue
+            val queued = runCatching { syncQueueDao.getAll() }.getOrDefault(emptyList())
+            if (queued.isNotEmpty()) {
+                Log.d(TAG, "Retrying ${queued.size} queued sync operations")
+                for (entry in queued) {
+                    val syncScope = runCatching { CloudSyncScope.valueOf(entry.scope) }.getOrNull()
+                    if (syncScope == null) {
+                        syncQueueDao.delete(entry.id)
+                        continue
+                    }
+                    val result = runCatching { pushScope(syncScope) }
+                    if (result.isSuccess) {
+                        syncQueueDao.delete(entry.id)
+                        Log.d(TAG, "Queued push succeeded for $syncScope")
+                    } else {
+                        val newRetryCount = entry.retryCount + 1
+                        if (newRetryCount >= MAX_RETRY_COUNT) {
+                            Log.w(TAG, "Dropping queued push for $syncScope after $newRetryCount retries")
+                            syncQueueDao.delete(entry.id)
+                        } else {
+                            syncQueueDao.updateRetry(entry.id, newRetryCount, result.exceptionOrNull()?.message, System.currentTimeMillis())
+                        }
+                    }
+                }
+            }
+            // Also retry in-memory dirty flag
+            if (isPushDirty) {
+                Log.d(TAG, "Retrying in-memory dirty push")
+                runCatching { startupSyncService.pushAllDataFromRepositories() }
+                    .onSuccess { isPushDirty = false }
+                    .onFailure { Log.w(TAG, "Dirty push retry failed: ${it.message}") }
+            }
         }
     }
 
@@ -86,15 +127,53 @@ class CloudSyncCoordinator @Inject constructor(
         flushJob = scope.launch {
             delay(debounceMsFor(invalidation.scope))
             if (!authManager.isAuthenticated) return@launch
-            runCatching { startupSyncService.pushAllDataFromRepositories() }
-                .onSuccess {
-                    isPushDirty = false
-                    Log.d(TAG, "Auto-push completed for ${invalidation.scope}")
+            val scopesToFlush: Set<CloudSyncScope>
+            synchronized(pendingScopes) {
+                scopesToFlush = pendingScopes.toSet()
+                pendingScopes.clear()
+            }
+            var allSuccess = true
+            for (s in scopesToFlush) {
+                val result = runCatching { pushScope(s) }
+                if (result.isFailure) {
+                    Log.w(TAG, "Targeted push failed for $s: ${result.exceptionOrNull()?.message}")
+                    allSuccess = false
+                    // Persist to offline queue for later retry
+                    runCatching {
+                        syncQueueDao.insert(SyncQueueEntity(scope = s.name))
+                    }
+                } else {
+                    // On success, clear any previous queue entries for this scope
+                    runCatching { syncQueueDao.deleteByScope(s.name) }
                 }
-                .onFailure { error ->
-                    Log.w(TAG, "Auto-push failed after ${invalidation.scope}: ${error.message}")
-                    isPushDirty = true
-                }
+            }
+            isPushDirty = !allSuccess
+            if (allSuccess) Log.d(TAG, "Targeted push completed for scopes: $scopesToFlush")
+        }
+    }
+
+    /**
+     * Push only the data for the given scope — targeted sync.
+     * WATCH_PROGRESS and WATCHLIST use targeted push (most frequent, biggest impact).
+     * Other scopes fall back to full push via [StartupSyncService].
+     */
+    private suspend fun pushScope(scope: CloudSyncScope) {
+        when (scope) {
+            CloudSyncScope.WATCH_PROGRESS -> {
+                val repo = watchHistoryRepositoryProvider.get()
+                val items = repo.getAllForPush()
+                val profileId = repo.resolveProfileIdPublic()
+                watchProgressSyncService.pushToRemote(items, profileId)
+            }
+            CloudSyncScope.WATCHLIST -> {
+                val items = watchlistRepositoryProvider.get().getAllForPush()
+                val profileId = items.firstOrNull()?.profileId ?: 1
+                librarySyncService.pushToRemote(items, profileId)
+            }
+            else -> {
+                // Less frequent scopes — full push is acceptable
+                startupSyncService.pushAllDataFromRepositories()
+            }
         }
     }
 
@@ -109,5 +188,9 @@ class CloudSyncCoordinator @Inject constructor(
         CloudSyncScope.COLLECTIONS -> 15_000L
         CloudSyncScope.HOME_CATALOG_SETTINGS -> 15_000L
         CloudSyncScope.ACCOUNT -> 20_000L
+    }
+
+    companion object {
+        private const val MAX_RETRY_COUNT = 5
     }
 }

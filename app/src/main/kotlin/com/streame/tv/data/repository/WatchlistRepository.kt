@@ -1,14 +1,13 @@
 package com.streame.tv.data.repository
 
 import android.content.Context
-import androidx.datastore.preferences.core.edit
 import com.streame.tv.data.api.TmdbApi
+import com.streame.tv.data.local.WatchlistDao
+import com.streame.tv.data.local.WatchlistEntity
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
+import com.streame.tv.util.AppLogger
 import com.streame.tv.util.Constants
-import com.streame.tv.util.traktDataStore
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -17,7 +16,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -29,7 +27,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Local watchlist item stored in DataStore
+ * Local watchlist item (legacy data class kept for cloud sync compatibility)
  */
 data class LocalWatchlistItem(
     val tmdbId: Int,
@@ -43,7 +41,7 @@ data class LocalWatchlistItem(
 
 /**
  * Profile-scoped local watchlist repository.
- * Each profile has its own separate watchlist stored in DataStore.
+ * Each profile has its own separate watchlist stored in Room.
  * No authentication required - works completely offline.
  */
 @Singleton
@@ -51,16 +49,10 @@ class WatchlistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val profileManager: ProfileManager,
     private val tmdbApi: TmdbApi,
-    private val librarySyncService: com.streame.tv.data.sync.LibrarySyncService,
     private val authManager: com.streame.tv.data.repository.AuthManager,
-    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
+    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus,
+    private val watchlistDao: WatchlistDao
 ) {
-    private val gson = Gson()
-
-    // Profile-scoped DataStore key
-    private fun watchlistKey() = profileManager.profileStringKey("local_watchlist_v1")
-    private fun watchlistKeyFor(profileId: String) = profileManager.profileStringKeyFor(profileId, "local_watchlist_v1")
-
     // In-memory cache for quick lookups
     private val keyCache = mutableSetOf<String>()
     private val itemsCache = mutableListOf<MediaItem>()
@@ -92,21 +84,26 @@ class WatchlistRepository @Inject constructor(
         return keyCache.contains(cacheKey(mediaType, tmdbId))
     }
 
+    private fun currentProfileId(): String = profileManager.getProfileIdSync().ifBlank { "default" }
+
     /**
      * Quick cache load - just loads keys for fast lookup
      */
     private suspend fun loadKeyCacheQuick() {
         try {
-            val items = loadWatchlistRaw()
+            val profileId = currentProfileId()
+            val items = watchlistDao.getAllForProfile(profileId)
             cacheMutex.withLock {
                 keyCache.clear()
-                items.forEach { item ->
-                    val type = if (item.mediaType == "tv") MediaType.TV else MediaType.MOVIE
-                    keyCache.add(cacheKey(type, item.tmdbId))
+                items.forEach { entity ->
+                    val type = if (entity.mediaType == "tv") MediaType.TV else MediaType.MOVIE
+                    keyCache.add(cacheKey(type, entity.tmdbId))
                 }
                 cacheLoaded = true
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppLogger.e("WatchlistRepo", "Failed to load watchlist key cache", e)
+        }
     }
 
     /**
@@ -114,28 +111,23 @@ class WatchlistRepository @Inject constructor(
      */
     suspend fun addToWatchlist(mediaType: MediaType, tmdbId: Int, mediaItem: MediaItem? = null) {
         val key = cacheKey(mediaType, tmdbId)
+        val typeStr = if (mediaType == MediaType.TV) "tv" else "movie"
+        val profileId = currentProfileId()
+        val now = System.currentTimeMillis()
 
-        // Create local item
-        val localItem = LocalWatchlistItem(
+        val entity = WatchlistEntity(
+            profileId = profileId,
+            mediaType = typeStr,
             tmdbId = tmdbId,
-            mediaType = if (mediaType == MediaType.TV) "tv" else "movie",
             title = mediaItem?.title ?: "",
             posterPath = mediaItem?.image,
             backdropPath = mediaItem?.backdrop,
-            addedAt = System.currentTimeMillis()
+            addedAt = now,
+            sourceOrder = 0,
+            updatedAt = now
         )
 
-        // Load existing items
-        val existingItems = loadWatchlistRaw().toMutableList()
-
-        // Remove if already exists (will re-add at front)
-        existingItems.removeAll { it.tmdbId == tmdbId && it.mediaType == localItem.mediaType }
-
-        // Add to front (most recent)
-        existingItems.add(0, localItem)
-
-        // Save to DataStore
-        saveWatchlist(existingItems)
+        watchlistDao.upsert(entity)
 
         // Update in-memory cache
         cacheMutex.withLock {
@@ -148,8 +140,7 @@ class WatchlistRepository @Inject constructor(
             cacheLoaded = true
         }
 
-        // Push to Supabase if authenticated
-        pushLibraryToRemote()
+        // Signal CloudSyncCoordinator to push (no direct push — avoids double-push)
         invalidationBus.markDirty(CloudSyncScope.WATCHLIST, reason = "addToWatchlist")
     }
 
@@ -159,15 +150,9 @@ class WatchlistRepository @Inject constructor(
     suspend fun removeFromWatchlist(mediaType: MediaType, tmdbId: Int) {
         val key = cacheKey(mediaType, tmdbId)
         val typeStr = if (mediaType == MediaType.TV) "tv" else "movie"
+        val profileId = currentProfileId()
 
-        // Load existing items
-        val existingItems = loadWatchlistRaw().toMutableList()
-
-        // Remove the item
-        existingItems.removeAll { it.tmdbId == tmdbId && it.mediaType == typeStr }
-
-        // Save to DataStore
-        saveWatchlist(existingItems)
+        watchlistDao.delete(profileId, typeStr, tmdbId)
 
         // Update in-memory cache
         cacheMutex.withLock {
@@ -176,8 +161,7 @@ class WatchlistRepository @Inject constructor(
             _watchlistItems.value = itemsCache.toList()
         }
 
-        // Push to Supabase if authenticated
-        pushLibraryToRemote()
+        // Signal CloudSyncCoordinator to push (no direct push — avoids double-push)
         invalidationBus.markDirty(CloudSyncScope.WATCHLIST, reason = "removeFromWatchlist")
     }
 
@@ -191,8 +175,9 @@ class WatchlistRepository @Inject constructor(
         }
 
         // Load and enrich items
-        val rawItems = loadWatchlistRaw()
-        if (rawItems.isEmpty()) {
+        val profileId = currentProfileId()
+        val entities = watchlistDao.getAllForProfile(profileId)
+        if (entities.isEmpty()) {
             cacheMutex.withLock {
                 itemsCache.clear()
                 keyCache.clear()
@@ -202,7 +187,7 @@ class WatchlistRepository @Inject constructor(
             return@withContext emptyList()
         }
 
-        val instantItems = rawItems.map { it.toBasicMediaItem() }
+        val instantItems = entities.map { it.toBasicMediaItem() }
         cacheMutex.withLock {
             keyCache.clear()
             instantItems.forEach { item ->
@@ -214,10 +199,10 @@ class WatchlistRepository @Inject constructor(
 
         // Enrich items with TMDB data in parallel
         val enrichedItems = coroutineScope {
-            rawItems.map { item ->
+            entities.map { entity ->
                 async {
                     tmdbSemaphore.withPermit {
-                        enrichWatchlistItem(item)
+                        enrichWatchlistItem(entity)
                     }
                 }
             }.awaitAll().filterNotNull()
@@ -256,46 +241,53 @@ class WatchlistRepository @Inject constructor(
      * after Trakt has the correct IDs.
      */
     suspend fun syncFromTraktOrder(traktItems: List<MediaItem>) = withContext(Dispatchers.IO) {
-        val existing = loadWatchlistRaw()
+        val profileId = currentProfileId()
+        val existing = watchlistDao.getAllForProfile(profileId)
         val existingByKey = existing.associateBy { "${it.mediaType}:${it.tmdbId}" }
 
-        val ordered = mutableListOf<LocalWatchlistItem>()
+        val ordered = mutableListOf<WatchlistEntity>()
 
         // Trakt items are already newest-first by listed_at.
         val orderedTraktItems = traktItems.toTraktOrder()
+        val now = System.currentTimeMillis()
         for ((index, item) in orderedTraktItems.withIndex()) {
             val typeStr = if (item.mediaType == MediaType.TV) "tv" else "movie"
             val key = "$typeStr:${item.id}"
             val local = existingByKey[key]
-            val traktOrderAddedAt = item.addedAt.takeIf { it > 0L } ?: (System.currentTimeMillis() - index)
+            val traktOrderAddedAt = item.addedAt.takeIf { it > 0L } ?: (now - index)
             ordered.add(
                 local?.copy(
                     title = item.title.ifBlank { local.title },
                     posterPath = item.image.ifBlank { local.posterPath },
                     backdropPath = item.backdrop ?: local.backdropPath,
                     addedAt = traktOrderAddedAt,
-                    sourceOrder = index
-                ) ?: LocalWatchlistItem(
-                    tmdbId = item.id,
+                    sourceOrder = index,
+                    updatedAt = now
+                ) ?: WatchlistEntity(
+                    profileId = profileId,
                     mediaType = typeStr,
+                    tmdbId = item.id,
                     title = item.title,
                     posterPath = item.image,
                     backdropPath = item.backdrop,
                     addedAt = traktOrderAddedAt,
-                    sourceOrder = index
+                    sourceOrder = index,
+                    updatedAt = now
                 )
             )
         }
 
-        saveWatchlist(ordered)
+        // Replace all items for this profile with the reordered list
+        watchlistDao.clearForProfile(profileId)
+        watchlistDao.upsertAll(ordered)
 
         // Invalidate enriched cache so the UI picks up the new order on next refresh.
         cacheMutex.withLock {
             itemsCache.clear()
             keyCache.clear()
-            ordered.forEach { raw ->
-                val type = if (raw.mediaType == "tv") MediaType.TV else MediaType.MOVIE
-                keyCache.add(cacheKey(type, raw.tmdbId))
+            ordered.forEach { entity ->
+                val type = if (entity.mediaType == "tv") MediaType.TV else MediaType.MOVIE
+                keyCache.add(cacheKey(type, entity.tmdbId))
             }
             _watchlistItems.value = ordered.map { it.toBasicMediaItem() }
             cacheLoaded = true
@@ -315,66 +307,53 @@ class WatchlistRepository @Inject constructor(
     suspend fun exportWatchlistForProfile(profileId: String): List<LocalWatchlistItem> {
         val safeProfileId = profileId.trim().ifBlank { "default" }
         return try {
-            val prefs = context.traktDataStore.data.first()
-            val json = prefs[watchlistKeyFor(safeProfileId)] ?: return emptyList()
-            val type = TypeToken.getParameterized(
-                MutableList::class.java,
-                LocalWatchlistItem::class.java
-            ).type
-            gson.fromJson<List<LocalWatchlistItem>>(json, type) ?: emptyList()
-        } catch (_: Exception) {
+            watchlistDao.getAllForProfile(safeProfileId).map { it.toLocalWatchlistItem() }
+        } catch (e: Exception) {
+            AppLogger.e("WatchlistRepo", "Failed to export watchlist for profile", e)
             emptyList()
         }
     }
 
     suspend fun importWatchlistForProfile(profileId: String, items: List<LocalWatchlistItem>) {
         val safeProfileId = profileId.trim().ifBlank { "default" }
-        val json = runCatching { gson.toJson(items) }.getOrDefault("[]")
-        context.traktDataStore.edit { prefs ->
-            prefs[watchlistKeyFor(safeProfileId)] = json
+        val now = System.currentTimeMillis()
+        val entities = items.map { item ->
+            WatchlistEntity(
+                profileId = safeProfileId,
+                mediaType = item.mediaType,
+                tmdbId = item.tmdbId,
+                title = item.title,
+                posterPath = item.posterPath,
+                backdropPath = item.backdropPath,
+                addedAt = item.addedAt,
+                sourceOrder = item.sourceOrder,
+                updatedAt = now
+            )
         }
+        watchlistDao.clearForProfile(safeProfileId)
+        watchlistDao.upsertAll(entities)
         if (profileManager.getProfileIdSync() == safeProfileId) {
             clearWatchlistCache()
         }
     }
 
     /**
-     * Load raw watchlist items from DataStore
+     * Load raw watchlist items from Room
      */
     private suspend fun loadWatchlistRaw(): List<LocalWatchlistItem> {
-        return try {
-            val prefs = context.traktDataStore.data.first()
-            val json = prefs[watchlistKey()] ?: return emptyList()
-            val type = TypeToken.getParameterized(
-                MutableList::class.java,
-                LocalWatchlistItem::class.java
-            ).type
-            (gson.fromJson<List<LocalWatchlistItem>>(json, type) ?: emptyList())
-                .sortedWith(compareBy<LocalWatchlistItem> { it.sourceOrder }.thenByDescending { it.addedAt })
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    /**
-     * Save watchlist items to DataStore
-     */
-    private suspend fun saveWatchlist(items: List<LocalWatchlistItem>) {
-        val json = gson.toJson(items)
-        context.traktDataStore.edit { prefs ->
-            prefs[watchlistKey()] = json
-        }
+        val profileId = currentProfileId()
+        return watchlistDao.getAllForProfile(profileId).map { it.toLocalWatchlistItem() }
     }
 
     /**
      * Enrich a watchlist item with TMDB data
      */
-    private suspend fun enrichWatchlistItem(item: LocalWatchlistItem): MediaItem? {
+    private suspend fun enrichWatchlistItem(entity: WatchlistEntity): MediaItem? {
         return try {
-            if (item.mediaType == "tv") {
-                val details = tmdbApi.getTvDetails(item.tmdbId)
+            if (entity.mediaType == "tv") {
+                val details = tmdbApi.getTvDetails(entity.tmdbId)
                 MediaItem(
-                    id = item.tmdbId,
+                    id = entity.tmdbId,
                     title = details.name,
                     subtitle = "TV Series",
                     overview = details.overview ?: "",
@@ -385,13 +364,13 @@ class WatchlistRepository @Inject constructor(
                     mediaType = MediaType.TV,
                     image = details.posterPath?.let { "${Constants.IMAGE_BASE}$it" } ?: "",
                     backdrop = details.backdropPath?.let { "${Constants.BACKDROP_BASE_LARGE}$it" },
-                    addedAt = item.addedAt,
-                    sourceOrder = item.sourceOrder
+                    addedAt = entity.addedAt,
+                    sourceOrder = entity.sourceOrder
                 )
             } else {
-                val details = tmdbApi.getMovieDetails(item.tmdbId)
+                val details = tmdbApi.getMovieDetails(entity.tmdbId)
                 MediaItem(
-                    id = item.tmdbId,
+                    id = entity.tmdbId,
                     title = details.title,
                     subtitle = "Movie",
                     overview = details.overview ?: "",
@@ -402,24 +381,13 @@ class WatchlistRepository @Inject constructor(
                     mediaType = MediaType.MOVIE,
                     image = details.posterPath?.let { "${Constants.IMAGE_BASE}$it" } ?: "",
                     backdrop = details.backdropPath?.let { "${Constants.BACKDROP_BASE_LARGE}$it" },
-                    addedAt = item.addedAt,
-                    sourceOrder = item.sourceOrder
+                    addedAt = entity.addedAt,
+                    sourceOrder = entity.sourceOrder
                 )
             }
         } catch (_: Exception) {
             // Fallback to basic item from stored data
-            MediaItem(
-                id = item.tmdbId,
-                title = item.title,
-                subtitle = if (item.mediaType == "tv") "TV Series" else "Movie",
-                overview = "",
-                year = "",
-                mediaType = if (item.mediaType == "tv") MediaType.TV else MediaType.MOVIE,
-                image = item.posterPath ?: "",
-                backdrop = item.backdropPath,
-                addedAt = item.addedAt,
-                sourceOrder = item.sourceOrder
-            )
+            entity.toBasicMediaItem()
         }
     }
 
@@ -429,7 +397,7 @@ class WatchlistRepository @Inject constructor(
         return if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
     }
 
-    private fun LocalWatchlistItem.toBasicMediaItem(): MediaItem {
+    private fun WatchlistEntity.toBasicMediaItem(): MediaItem {
         val type = if (mediaType == "tv") MediaType.TV else MediaType.MOVIE
         return MediaItem(
             id = tmdbId,
@@ -445,6 +413,18 @@ class WatchlistRepository @Inject constructor(
         )
     }
 
+    private fun WatchlistEntity.toLocalWatchlistItem(): LocalWatchlistItem {
+        return LocalWatchlistItem(
+            tmdbId = tmdbId,
+            mediaType = mediaType,
+            title = title,
+            posterPath = posterPath,
+            backdropPath = backdropPath,
+            addedAt = addedAt,
+            sourceOrder = sourceOrder
+        )
+    }
+
     private fun List<MediaItem>.toTraktOrder(): List<MediaItem> {
         return sortedWith(
             compareBy<MediaItem> { it.sourceOrder }
@@ -454,48 +434,62 @@ class WatchlistRepository @Inject constructor(
 
     /**
      * Merge cloud library items into local watchlist.
-     * Cloud items not present locally are added; existing items keep the newer addedAt.
+     * Uses updated_at conflict resolution: cloud items not present locally are added;
+     * existing items are only overwritten if the cloud version is newer (higher addedAt).
      * After merge, the in-memory cache and StateFlow are refreshed.
      */
     suspend fun mergeFromCloud(cloudItems: List<com.streame.tv.data.remote.supabase.SupabaseLibraryItem>) {
         if (cloudItems.isEmpty()) return
-        val localItems = loadWatchlistRaw().toMutableList()
-        val localKeys = localItems.map { "${it.mediaType}:${it.tmdbId}" }.toMutableSet()
-        var added = 0
+        val profileId = currentProfileId()
+        val localEntities = watchlistDao.getAllForProfile(profileId)
+        val localByKey = localEntities.associateBy { "${it.mediaType}:${it.tmdbId}" }
+        val now = System.currentTimeMillis()
+        val toUpsert = mutableListOf<WatchlistEntity>()
+        var merged = 0
+
         cloudItems.forEach { cloud ->
             val tmdbId = cloud.contentId.toIntOrNull() ?: return@forEach
             val mediaType = cloud.contentType // "tv" or "movie"
             val key = "$mediaType:$tmdbId"
-            if (!localKeys.contains(key)) {
-                localItems.add(
-                    LocalWatchlistItem(
-                        tmdbId = tmdbId,
+            val cloudAddedAt = if (cloud.addedAt > 0) cloud.addedAt else now
+            val local = localByKey[key]
+
+            val shouldTakeCloud = when {
+                local == null -> true  // new item — always add
+                cloudAddedAt > local.addedAt -> true  // cloud is newer
+                else -> false  // local is newer or same — keep local
+            }
+
+            if (shouldTakeCloud) {
+                toUpsert.add(
+                    WatchlistEntity(
+                        profileId = profileId,
                         mediaType = mediaType,
-                        title = cloud.name,
-                        posterPath = cloud.poster,
-                        backdropPath = cloud.background,
-                        addedAt = if (cloud.addedAt > 0) cloud.addedAt else System.currentTimeMillis()
+                        tmdbId = tmdbId,
+                        title = cloud.name.ifBlank { local?.title ?: "" },
+                        posterPath = cloud.poster ?: local?.posterPath,
+                        backdropPath = cloud.background ?: local?.backdropPath,
+                        addedAt = cloudAddedAt,
+                        sourceOrder = local?.sourceOrder ?: Int.MAX_VALUE,
+                        updatedAt = now
                     )
                 )
-                localKeys.add(key)
-                added++
+                merged++
             }
         }
-        if (added > 0) {
-            saveWatchlist(localItems)
+        if (merged > 0) {
+            watchlistDao.upsertAll(toUpsert)
             // Refresh in-memory cache
             cacheMutex.withLock {
                 keyCache.clear()
-                localItems.forEach { item ->
-                    val type = if (item.mediaType == "tv") MediaType.TV else MediaType.MOVIE
-                    keyCache.add(cacheKey(type, item.tmdbId))
+                val allEntities = watchlistDao.getAllForProfile(profileId)
+                allEntities.forEach { entity ->
+                    val type = if (entity.mediaType == "tv") MediaType.TV else MediaType.MOVIE
+                    keyCache.add(cacheKey(type, entity.tmdbId))
                 }
                 cacheLoaded = true
-                // Rebuild itemsCache from enriched data
-                val enriched = localItems.mapNotNull { item ->
-                    val type = if (item.mediaType == "tv") MediaType.TV else MediaType.MOVIE
-                    if (keyCache.contains(cacheKey(type, item.tmdbId))) item.toBasicMediaItem() else null
-                }
+                // Rebuild itemsCache from basic data
+                val enriched = allEntities.map { it.toBasicMediaItem() }
                 itemsCache.clear()
                 itemsCache.addAll(enriched)
                 _watchlistItems.value = itemsCache.toList()
@@ -504,29 +498,27 @@ class WatchlistRepository @Inject constructor(
     }
 
     /**
-     * Push current watchlist state to Supabase if authenticated.
-     * Fire-and-forget — failures are logged but don't block the user.
+     * Get all watchlist items formatted for cloud push.
+     * Called by CloudSyncCoordinator when it's time to push.
      */
-    private suspend fun pushLibraryToRemote() {
-        if (!authManager.isAuthenticated) return
-        try {
-            val profileId = resolveProfileId()
-            val items = loadWatchlistRaw().map { local ->
-                com.streame.tv.data.remote.supabase.SupabaseLibraryItem(
-                    contentId = local.tmdbId.toString(),
-                    contentType = local.mediaType,
-                    name = local.title,
-                    poster = local.posterPath,
-                    posterShape = "POSTER",
-                    background = local.backdropPath,
-                    description = null,
-                    releaseInfo = null,
-                    imdbRating = null,
-                    profileId = profileId
-                )
-            }
-            librarySyncService.pushToRemote(items, profileId)
-        } catch (_: Exception) { }
+    suspend fun getAllForPush(): List<com.streame.tv.data.remote.supabase.SupabaseLibraryItem> {
+        if (!authManager.isAuthenticated) return emptyList()
+        val profileId = resolveProfileId()
+        val profileIdStr = currentProfileId()
+        return watchlistDao.getAllForProfile(profileIdStr).map { entity ->
+            com.streame.tv.data.remote.supabase.SupabaseLibraryItem(
+                contentId = entity.tmdbId.toString(),
+                contentType = entity.mediaType,
+                name = entity.title,
+                poster = entity.posterPath,
+                posterShape = "POSTER",
+                background = entity.backdropPath,
+                description = null,
+                releaseInfo = null,
+                imdbRating = null,
+                profileId = profileId
+            )
+        }
     }
 
     private suspend fun resolveProfileId(): Int {

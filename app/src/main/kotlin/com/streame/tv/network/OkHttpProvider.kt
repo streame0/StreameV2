@@ -3,10 +3,14 @@ package com.streame.tv.network
 import android.app.ActivityManager
 import android.content.Context
 import android.util.Log
-import coil.ImageLoader
-import coil.disk.DiskCache
-import coil.memory.MemoryCache
+import coil3.ImageLoader
+import coil3.disk.DiskCache
+import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.*
+import okio.Path.Companion.toPath
 import okhttp3.Cache
+import okhttp3.CertificatePinner
 import okhttp3.ConnectionPool
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -45,6 +49,32 @@ object OkHttpProvider {
     const val IMAGE_DISK_CACHE_SIZE_TV = 256L * 1024L * 1024L
     const val IMAGE_DISK_CACHE_SIZE_MOBILE = 192L * 1024L * 1024L
     const val IMAGE_DISK_CACHE_SIZE_LOW_RAM = 96L * 1024L * 1024L
+    /**
+     * Certificate pinning for API endpoints that carry sensitive data
+     * (auth tokens, API keys, user data). Pins are SHA-256 hashes of
+     * the subjectPublicKeyInfo of the leaf or intermediate certificate.
+     *
+     * Backup pins allow certificate rotation without breaking the app.
+     * To generate a pin: echo | openssl s_client -connect host:443 | openssl x509 -pubkey | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | openssl enc -base64
+     */
+    private val certificatePinner = CertificatePinner.Builder()
+        // TMDB API — carries API key in query params
+        .add("api.themoviedb.org",
+            "sha256/G9LNNAql897egYsabashkzUCTEJkWBzgoEtk8X/678c=",  // Amazon RSA 2048 M04 intermediate
+            "sha256/++MBgDH5WGvL9Bcn5Be30cRcL0f5O+NyoXuWtQdX1aI="   // Amazon Root CA 1
+        )
+        // Trakt API — carries OAuth tokens in headers
+        .add("api.trakt.tv",
+            "sha256/FbsEWoQj9ZJ+ZZR5jneKjW8gZ3j3Iw7LZmvO3gPjL1w=",  // Let's Encrypt R4 intermediate
+            "sha256/sRHdihwgkaV1N4j9kUo2Y0uU5qWYcQCw0yAJUw0b0+4="   // backup: Let's Encrypt R3 intermediate
+        )
+        // Supabase — carries JWT tokens and user data
+        .add("*.supabase.co",
+            "sha256/kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",  // WE1 intermediate (Google Trust Services)
+            "sha256/mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c="   // GTS Root R4
+        )
+        .build()
+
     private const val CLOUDFLARE_DOH_HOST = "cloudflare-dns.com"
     private const val CLOUDFLARE_DOH_URL = "https://cloudflare-dns.com/dns-query"
     private const val GOOGLE_DOH_HOST = "dns.google"
@@ -201,6 +231,7 @@ object OkHttpProvider {
 
         builder
             .addNetworkInterceptor(tmdbCacheInterceptor)
+            .certificatePinner(certificatePinner)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
@@ -387,21 +418,20 @@ object OkHttpProvider {
             else -> IMAGE_DISK_CACHE_SIZE_MOBILE
         }
         return ImageLoader.Builder(context)
-            .okHttpClient(coilClient)
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { coilClient }))
+            }
             .memoryCache {
-                MemoryCache.Builder(context)
-                    .maxSizeBytes(memoryCacheBytes)
+                MemoryCache.Builder()
+                    .maxSizeBytes(memoryCacheBytes.toLong())
                     .build()
             }
             .diskCache {
                 DiskCache.Builder()
-                    .directory(context.cacheDir.resolve("image_cache"))
+                    .directory(context.cacheDir.resolve("image_cache").absolutePath.toPath())
                     .maxSizeBytes(diskCacheBytes)
                     .build()
             }
-            .crossfade(false)
-            .respectCacheHeaders(false)
-            .allowRgb565(true)
             .build()
     }
 }

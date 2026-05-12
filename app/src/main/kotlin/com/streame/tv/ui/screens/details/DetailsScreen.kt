@@ -109,12 +109,13 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import coil.ImageLoader
-import coil.compose.AsyncImage
-import coil.compose.SubcomposeAsyncImage
-import coil.decode.SvgDecoder
-import coil.request.ImageRequest
-import coil.size.Precision
+import coil3.ImageLoader
+import coil3.compose.AsyncImage
+import coil3.compose.SubcomposeAsyncImage
+import coil3.svg.SvgDecoder
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.*
+import coil3.size.Precision
 import com.streame.tv.R
 import com.streame.tv.data.model.CastMember
 import com.streame.tv.data.model.Episode
@@ -222,6 +223,20 @@ fun DetailsScreen(
     var contextMenuSeason by remember { mutableIntStateOf(1) }
     var seasonSelectDownAtMs by remember { mutableLongStateOf(0L) }
     var ignoreFirstResumeRefresh by remember(mediaType, mediaId, initialSeason, initialEpisode) { mutableStateOf(true) }
+
+    // Single BackHandler for ALL back logic — always enabled so it always consumes
+    // the system back callback. If a modal is open, close it; otherwise navigate back.
+    // MUST be always-enabled: if onKeyEvent closes a modal first, it disables a
+    // conditional BackHandler, and the system back falls through to popBackStack() = double-back.
+    BackHandler {
+        when {
+            showStreamSelector -> showStreamSelector = false
+            showEpisodeContextMenu -> showEpisodeContextMenu = false
+            showSeasonContextMenu -> showSeasonContextMenu = false
+            showTrailerPlayer -> showTrailerPlayer = false
+            else -> onBack()
+        }
+    }
 
     val focusRequester = remember { FocusRequester() }
 
@@ -362,7 +377,9 @@ fun DetailsScreen(
                     }
                     
                     when (event.key) {
-                        Key.Back, Key.Escape -> {
+                        // Key.Back is NOT handled here — BackHandler above consumes both
+                        // the key event and the system back callback, preventing double-back.
+                        Key.Escape -> {
                             if (showTrailerPlayer) { showTrailerPlayer = false; true }
                             else { onBack(); true }
                         }
@@ -676,7 +693,7 @@ fun DetailsScreen(
                     onBack = onBack,
                     onButtonClick = { idx ->
                         when (idx) {
-                            0 -> { // Play
+                            0 -> { // Play - Auto-play highest quality source
                                 val season = if (mediaType == MediaType.TV) {
                                     uiState.playSeason
                                         ?: uiState.episodes.getOrNull(episodeIndex)?.seasonNumber
@@ -704,9 +721,15 @@ fun DetailsScreen(
                                 } else {
                                     // Autoplay ON → go straight to the player; PlayerScreen auto-picks.
                                     onNavigateToPlayer(
-                                        mediaType, mediaId, season, episode,
-                                        uiState.imdbId, null,
-                                        uiState.lastAddonId, uiState.lastSourceName, uiState.lastBingeGroup,
+                                        mediaType,
+                                        mediaId,
+                                        season,
+                                        episode,
+                                        uiState.imdbId,
+                                        null,
+                                        uiState.lastAddonId,
+                                        uiState.lastSourceName,
+                                        uiState.lastBingeGroup,
                                         startPositionMs
                                     )
                                 }
@@ -780,7 +803,6 @@ fun DetailsScreen(
         
         // In-app Trailer Player (fullscreen overlay)
         if (showTrailerPlayer && uiState.trailerKey != null) {
-            BackHandler { showTrailerPlayer = false }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1055,9 +1077,10 @@ private fun DetailsContent(
     val context = LocalContext.current
     val metadataLogoImageLoader = remember(context) {
         ImageLoader.Builder(context)
-            .okHttpClient(OkHttpProvider.coilClient)
-            .components { add(SvgDecoder.Factory()) }
-            .crossfade(false)
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { OkHttpProvider.coilClient }))
+                add(SvgDecoder.Factory())
+            }
             .build()
     }
     val focusSectionForUi = if (contentHasFocus) focusedSection else null

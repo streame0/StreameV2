@@ -1,6 +1,7 @@
 package com.streame.tv.ui.screens.search
 
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -173,12 +174,26 @@ fun SearchScreen(
 
     val showFilters = uiState.query.isEmpty()
 
+    // BackHandler handles system back + Key.Back — prevents double-back
+    BackHandler {
+        when (focusZone) {
+            FocusZone.RESULTS -> {
+                if (showFilters) focusZone = FocusZone.FILTERS
+                else { focusZone = FocusZone.SEARCH_INPUT; searchFocusRequester.requestFocus() }
+            }
+            FocusZone.FILTERS -> { focusZone = FocusZone.SEARCH_INPUT; searchFocusRequester.requestFocus() }
+            FocusZone.SEARCH_INPUT -> { focusZone = FocusZone.SIDEBAR }
+            FocusZone.SIDEBAR -> onBack()
+        }
+    }
+
     // D-pad handler: manages zone transitions. FILTERS zone lets native focus handle Left/Right.
     val dpadModifier = if (!isTouchDevice) {
         Modifier.onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
             when (event.key) {
-                Key.Back, Key.Escape -> when (focusZone) {
+                // Key.Back handled by BackHandler — not here
+                Key.Escape -> when (focusZone) {
                     FocusZone.RESULTS -> {
                         if (showFilters) focusZone = FocusZone.FILTERS
                         else { focusZone = FocusZone.SEARCH_INPUT; searchFocusRequester.requestFocus() }
@@ -186,7 +201,6 @@ fun SearchScreen(
                     }
                     FocusZone.FILTERS -> { focusZone = FocusZone.SEARCH_INPUT; searchFocusRequester.requestFocus(); true }
                     FocusZone.SEARCH_INPUT -> {
-                        // Always progress toward sidebar so repeated Back presses can exit Search.
                         focusZone = FocusZone.SIDEBAR
                         true
                     }

@@ -189,6 +189,68 @@ data class StreameSkinTokens(
                 ),
             )
         }
+
+        /**
+         * OLED theme variant — true #000000 backgrounds for OLED burn-in prevention.
+         * No gradients, no elevated surfaces, pure black everywhere.
+         */
+        fun oled(): StreameSkinTokens {
+            val easeOut: Easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+            val defaults = defaults()
+
+            return defaults.copy(
+                colors = StreameColorTokens(
+                    background = Color(0xFF000000),       // Pure black
+                    surface = Color(0xFF000000),          // Pure black — no elevation tint
+                    surfaceRaised = Color(0xFF0A0A0A),    // Minimal tint for interactive surfaces
+                    textPrimary = Color(0xFFEDEDED),
+                    textMuted = Color(0xB3EDEDED),
+                    accent = Color(0xFFEDEDED),
+                    focusOutline = Color(0xFFFFFFFF),
+                    focusGradientStart = Color(0xFFFFFFFF),
+                    focusGradientEnd = Color(0xFFFFFFFF),
+                    tealAccent = Color(0xFF00D9B5),
+                    watchedGreen = Color(0xFF4CAF50),
+                    inProgressGrey = Color(0xFF757575),
+                ),
+                focus = defaults.focus.copy(
+                    outlineWidth = 2.dp,  // Thinner border for OLED subtlety
+                    glowWidth = 0.dp,
+                    glowAlpha = 0f,
+                ),
+            )
+        }
+
+        /**
+         * Dimmer theme variant — warmer, lower-contrast palette for late-night viewing.
+         * Reduced brightness, warmer tones, softer focus states.
+         */
+        fun dimmer(): StreameSkinTokens {
+            val easeOut: Easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+            val defaults = defaults()
+
+            return defaults.copy(
+                colors = StreameColorTokens(
+                    background = Color(0xFF08090A),
+                    surface = Color(0xFF0F0F0F),
+                    surfaceRaised = Color(0xFF1A1A1A),
+                    textPrimary = Color(0xFFBFBFBF),     // Softer text (75% of full white)
+                    textMuted = Color(0x80BFBFBF),        // Even more muted
+                    accent = Color(0xFFBFBFBF),
+                    focusOutline = Color(0xFFD4D4D4),     // Softer focus ring
+                    focusGradientStart = Color(0xFFD4D4D4),
+                    focusGradientEnd = Color(0xFFD4D4D4),
+                    tealAccent = Color(0xFF00B896),       // Slightly muted teal
+                    watchedGreen = Color(0xFF388E3C),     // Darker green
+                    inProgressGrey = Color(0xFF616161),
+                ),
+                focus = defaults.focus.copy(
+                    outlineWidth = 2.dp,  // Softer focus border
+                    glowWidth = 0.dp,
+                    glowAlpha = 0f,
+                ),
+            )
+        }
     }
 }
 

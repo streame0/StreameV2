@@ -1,7 +1,8 @@
 package com.streame.tv.ui.screens.settings
 
 import android.content.Context
-import coil.Coil
+import coil3.SingletonImageLoader
+import coil3.request.CachePolicy
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -137,6 +138,14 @@ data class SettingsUiState(
     val contentLanguage: String = "en-US",
     // Device mode override
     val deviceModeOverride: String = "auto",
+    // Theme variant
+    val themeVariant: String = "arctic",
+    // Experience mode: "essential" hides advanced settings, "advanced" shows all
+    val experienceMode: String = "advanced",
+    // Home layout mode: "rows", "compact_grid", "dense_grid"
+    val homeLayoutMode: String = "rows",
+    // Poster shape: "landscape", "portrait", "square"
+    val posterShape: String = "landscape",
     // Skip profile selection
     val skipProfileSelection: Boolean = false,
     val clockFormat: String = "24h",
@@ -373,6 +382,10 @@ class SettingsViewModel @Inject constructor(
             val cardLayoutMode = normalizeCardLayoutMode(prefs[cardLayoutModeKey()])
             val frameRateMode = normalizeFrameRateMode(prefs[frameRateMatchingModeKey()])
             val deviceModeOverride = prefs[com.streame.tv.util.DEVICE_MODE_OVERRIDE_KEY] ?: "auto"
+            val themeVariant = prefs[stringPreferencesKey("theme_variant")] ?: "arctic"
+            val experienceMode = prefs[stringPreferencesKey("experience_mode")] ?: "advanced"
+            val homeLayoutMode = prefs[stringPreferencesKey("home_layout_mode")] ?: "rows"
+            val posterShape = prefs[stringPreferencesKey("poster_shape")] ?: "landscape"
             val skipProfileSelection = prefs[com.streame.tv.util.SKIP_PROFILE_SELECTION_KEY] ?: false
             val contentLang = prefs[contentLanguageKey()] ?: "en-US"
             // Apply content language to MediaRepository immediately
@@ -454,6 +467,10 @@ class SettingsViewModel @Inject constructor(
                 catalogs = existingCatalogs,
                 contentLanguage = contentLang,
                 deviceModeOverride = deviceModeOverride,
+                themeVariant = themeVariant,
+                experienceMode = experienceMode,
+                homeLayoutMode = homeLayoutMode,
+                posterShape = posterShape,
                 skipProfileSelection = skipProfileSelection,
                 clockFormat = clockFormat,
                 qualityFilters = qualityFilters,
@@ -826,12 +843,7 @@ class SettingsViewModel @Inject constructor(
 
     fun cycleAutoPlayMinQuality() {
         val current = normalizeAutoPlayMinQuality(_uiState.value.autoPlayMinQuality)
-        val next = when (current) {
-            "Any" -> "720p"
-            "720p" -> "1080p"
-            "1080p" -> "4K"
-            else -> "Any"
-        }
+        val next = SettingsNormalizers.nextAutoPlayMinQuality(current)
         setAutoPlayMinQuality(next)
     }
 
@@ -847,11 +859,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun toggleCardLayoutMode() {
-        val next = if (_uiState.value.cardLayoutMode.equals("Poster", ignoreCase = true)) {
-            CARD_LAYOUT_MODE_LANDSCAPE
-        } else {
-            "Poster"
-        }
+        val next = SettingsNormalizers.nextCardLayoutMode(_uiState.value.cardLayoutMode)
         setCardLayoutMode(next)
     }
 
@@ -899,6 +907,50 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Set theme variant: "arctic", "oled", "dimmer". Applies immediately. */
+    fun setThemeVariant(variant: String) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[stringPreferencesKey("theme_variant")] = variant
+            }
+            _uiState.value = _uiState.value.copy(themeVariant = variant)
+            pushProfileSettingsToRemote()
+        }
+    }
+
+    /** Set experience mode: "essential" hides advanced settings, "advanced" shows all. */
+    fun setExperienceMode(mode: String) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[stringPreferencesKey("experience_mode")] = mode
+            }
+            _uiState.value = _uiState.value.copy(experienceMode = mode)
+            pushProfileSettingsToRemote()
+        }
+    }
+
+    /** Set home layout mode: "rows", "compact_grid", "dense_grid" */
+    fun setHomeLayoutMode(mode: String) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[stringPreferencesKey("home_layout_mode")] = mode
+            }
+            _uiState.value = _uiState.value.copy(homeLayoutMode = mode)
+            pushProfileSettingsToRemote()
+        }
+    }
+
+    /** Set poster shape: "landscape", "portrait", "square" */
+    fun setPosterShape(shape: String) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[stringPreferencesKey("poster_shape")] = shape
+            }
+            _uiState.value = _uiState.value.copy(posterShape = shape)
+            pushProfileSettingsToRemote()
+        }
+    }
+
     fun setSkipProfileSelection(skip: Boolean) {
         viewModelScope.launch {
             context.settingsDataStore.edit { prefs ->
@@ -911,11 +963,7 @@ class SettingsViewModel @Inject constructor(
 
     fun cycleFrameRateMatchingMode() {
         val current = normalizeFrameRateMode(_uiState.value.frameRateMatchingMode)
-        val next = when (current) {
-            "Off" -> "Seamless only"
-            "Seamless only" -> "Always"
-            else -> "Off"
-        }
+        val next = SettingsNormalizers.nextFrameRateMode(current)
         setFrameRateMatchingMode(next)
     }
 
@@ -930,24 +978,8 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    private fun normalizeFrameRateMode(raw: String?): String {
-        return when (raw?.trim()?.lowercase()) {
-            "off" -> "Off"
-            "seamless", "seamless only", "only if seamless", "only_if_seamless" -> "Seamless only"
-            "always" -> "Always"
-            else -> "Off"
-        }
-    }
-
-    private fun normalizeAutoPlayMinQuality(raw: String?): String {
-        return when (raw?.trim()?.lowercase()) {
-            "any" -> "Any"
-            "720p", "hd" -> "720p"
-            "1080p", "fullhd", "fhd" -> "1080p"
-            "4k", "2160p", "uhd" -> "4K"
-            else -> "Any"
-        }
-    }
+    private fun normalizeFrameRateMode(raw: String?) = SettingsNormalizers.normalizeFrameRateMode(raw)
+    private fun normalizeAutoPlayMinQuality(raw: String?) = SettingsNormalizers.normalizeAutoPlayMinQuality(raw)
 
     fun setTrailerAutoPlay(enabled: Boolean) {
         viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled); pushProfileSettingsToRemote() }
@@ -970,7 +1002,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun cycleClockFormat() {
-        val next = if (_uiState.value.clockFormat == "24h") "12h" else "24h"
+        val next = SettingsNormalizers.nextClockFormat(_uiState.value.clockFormat)
         viewModelScope.launch {
             context.settingsDataStore.edit { it[clockFormatKey()] = next }
             _uiState.value = _uiState.value.copy(clockFormat = next)
@@ -986,14 +1018,7 @@ class SettingsViewModel @Inject constructor(
      */
     fun cycleVolumeBoost() {
         val current = _uiState.value.volumeBoostDb
-        val next = when {
-            current < 3 -> 3
-            current < 6 -> 6
-            current < 9 -> 9
-            current < 12 -> 12
-            current < 15 -> 15
-            else -> 0
-        }
+        val next = SettingsNormalizers.nextVolumeBoost(current)
         viewModelScope.launch {
             context.settingsDataStore.edit { it[volumeBoostDbKey()] = next.toString() }
             _uiState.value = _uiState.value.copy(volumeBoostDb = next)
@@ -1002,42 +1027,18 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun cycleSubtitleSize() {
-        val next = when (_uiState.value.subtitleSize) { "Small" -> "Medium"; "Medium" -> "Large"; "Large" -> "Extra Large"; else -> "Small" }
+        val next = SettingsNormalizers.nextSubtitleSize(_uiState.value.subtitleSize)
         viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next); pushProfileSettingsToRemote() }
     }
 
     fun cycleSubtitleColor() {
-        val next = when (_uiState.value.subtitleColor) { "White" -> "Yellow"; "Yellow" -> "Green"; "Green" -> "Cyan"; else -> "White" }
+        val next = SettingsNormalizers.nextSubtitleColor(_uiState.value.subtitleColor)
         viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next); pushProfileSettingsToRemote() }
     }
 
-    private fun normalizeDnsProviderValue(raw: String?): String {
-        return when (raw?.trim()?.lowercase()) {
-            "system", "system dns", "system_dns" -> "system"
-            "cloudflare", "cloudflare dns", "cloudflare_dns" -> "cloudflare"
-            "google" -> "google"
-            "adguard", "ad guard" -> "adguard"
-            else -> "system"
-        }
-    }
-
-    private fun dnsProviderLabel(value: String): String {
-        return when (normalizeDnsProviderValue(value)) {
-            "system" -> "System DNS"
-            "google" -> "Google"
-            "adguard" -> "AdGuard"
-            else -> "Cloudflare"
-        }
-    }
-
-    private fun dnsProviderValueFromLabel(label: String): String {
-        return when (label.trim().lowercase()) {
-            "system dns" -> "system"
-            "google" -> "google"
-            "adguard" -> "adguard"
-            else -> "cloudflare"
-        }
-    }
+    private fun normalizeDnsProviderValue(raw: String?) = SettingsNormalizers.normalizeDnsProviderValue(raw)
+    private fun dnsProviderLabel(value: String) = SettingsNormalizers.dnsProviderLabel(value)
+    private fun dnsProviderValueFromLabel(label: String) = SettingsNormalizers.dnsProviderValueFromLabel(label)
 
     fun setDnsProvider(label: String) {
         val value = dnsProviderValueFromLabel(label)
@@ -1064,7 +1065,7 @@ class SettingsViewModel @Inject constructor(
             val imageLoader = withContext(Dispatchers.IO) {
                 OkHttpProvider.createCoilImageLoader(context)
             }
-            Coil.setImageLoader(imageLoader)
+            SingletonImageLoader.setUnsafe(imageLoader)
         }
     }
 

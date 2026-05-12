@@ -126,7 +126,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.streame.tv.network.OkHttpProvider
 import com.streame.tv.data.model.MediaType
 import com.streame.tv.data.model.StreamSource
@@ -1825,7 +1825,9 @@ fun PlayerScreen(
                         else -> Unit // fall through to normal handling
                     }
 
-                    if ((event.key == Key.Back || event.key == Key.Escape) &&
+                    // Key.Back is NOT handled in onKeyEvent — BackHandler above consumes
+                    // both the key event and the system back callback, preventing double-back.
+                    if (event.key == Key.Escape &&
                         !showSubtitleMenu && !showSourceMenu && !showNextEpisodePrompt && uiState.error == null
                     ) {
                         if (showControls) {
@@ -1856,10 +1858,11 @@ fun PlayerScreen(
                                 }
                                 true
                             }
-                            Key.Back, Key.Escape -> {
+                            Key.Escape -> {
                                 onBack()
                                 true
                             }
+                            // Key.Back handled by BackHandler — not here
                             else -> false
                         }
                     }
@@ -1878,7 +1881,7 @@ fun PlayerScreen(
                             showControls = true
                             true
                         }
-                        Key.Back, Key.Escape -> {
+                        Key.Escape -> {
                                 showSubtitleMenu = false
                                 showControls = true
                                 coroutineScope.launch {
@@ -1887,6 +1890,7 @@ fun PlayerScreen(
                                 }
                                 true
                             }
+                            // Key.Back handled by BackHandler — not here
                             Key.DirectionUp -> {
                                 when {
                                     subtitleMenuTab == 1 -> { if (subtitleMenuIndex > 0) subtitleMenuIndex-- }
@@ -1984,7 +1988,8 @@ fun PlayerScreen(
                     }
 
                     when (event.key) {
-                        Key.Back, Key.Escape -> {
+                        // Key.Back handled by BackHandler — not here
+                        Key.Escape -> {
                             onBack()
                             true
                         }
@@ -3338,7 +3343,8 @@ private fun handleSubtitleMenuKey(
     onSelect: () -> Unit
 ): Boolean {
     return when (key) {
-        Key.Back, Key.Escape -> {
+        // Key.Back handled by BackHandler — not here
+        Key.Escape -> {
             onClose()
             true
         }

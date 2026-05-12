@@ -7,6 +7,7 @@ import com.streame.tv.data.model.MediaType
 import com.streame.tv.data.repository.MediaRepository
 import com.streame.tv.data.repository.TraktRepository
 import com.streame.tv.data.repository.WatchlistRepository
+import com.streame.tv.util.AppLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -238,7 +239,8 @@ class WatchlistViewModel @Inject constructor(
                 }
                 true
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.e("WatchlistVM", "Trakt watchlist sync failed", e)
             false
         } finally {
             traktSyncInFlight = false

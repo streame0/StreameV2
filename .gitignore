@@ -16,9 +16,6 @@ gen/
 out/
 release/
 
-# Repository-local automation not used by this distribution
-.github/workflows/
-
 # Gradle files
 .gradle/
 build/
@@ -97,7 +94,7 @@ upload.keystore
 *~
 
 # Internal planning artifacts (not needed for OSS runtime/build)
-.planning/
+# .planning/  — commented out for GSD codebase mapping
 .claude/
 .codex
 

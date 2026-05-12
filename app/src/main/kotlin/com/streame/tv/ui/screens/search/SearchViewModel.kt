@@ -8,6 +8,7 @@ import com.streame.tv.data.model.Category
 import com.streame.tv.data.repository.MediaRepository
 import com.streame.tv.di.DispatcherProvider
 import com.streame.tv.util.AppException
+import com.streame.tv.util.AppLogger
 import com.streame.tv.util.toAppException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -194,7 +195,7 @@ class SearchViewModel @Inject constructor(
                 }
             }
             if (items.isEmpty()) null else Category(id = "${type}_${title}_${genre}_${lang}_$page", title = title, items = items.take(20))
-        } catch (_: Exception) { null }
+        } catch (e: Exception) { AppLogger.e("SearchVM", "Failed to build row '$title'", e); null }
     }
 
     // ── Filters → reload discover rows ──────────────────────────────────

@@ -66,7 +66,12 @@ sealed class Screen(val route: String) {
         }
     }
     
-    object Player : Screen("player/{mediaType}/{mediaId}?seasonNumber={seasonNumber}&episodeNumber={episodeNumber}&imdbId={imdbId}&streamUrl={streamUrl}&preferredAddonId={preferredAddonId}&preferredSourceName={preferredSourceName}&preferredBingeGroup={preferredBingeGroup}&startPositionMs={startPositionMs}") {
+    object Player : Screen("player/{playbackId}") {
+        /**
+         * Create a Player route by storing all playback parameters
+         * in [PlaybackParamsStore] and returning a route with just the playbackId.
+         * This avoids 10+ URL-encoded parameters in the navigation route.
+         */
         fun createRoute(
             mediaType: MediaType,
             mediaId: Int,
@@ -79,17 +84,20 @@ sealed class Screen(val route: String) {
             preferredBingeGroup: String? = null,
             startPositionMs: Long? = null
         ): String {
-            val base = "player/${mediaType.name.lowercase()}/$mediaId"
-            val params = mutableListOf<String>()
-            seasonNumber?.let { params.add("seasonNumber=$it") }
-            episodeNumber?.let { params.add("episodeNumber=$it") }
-            imdbId?.let { params.add("imdbId=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            streamUrl?.let { params.add("streamUrl=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            preferredAddonId?.let { params.add("preferredAddonId=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            preferredSourceName?.let { params.add("preferredSourceName=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            preferredBingeGroup?.let { params.add("preferredBingeGroup=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            startPositionMs?.let { params.add("startPositionMs=$it") }
-            return if (params.isNotEmpty()) "$base?${params.joinToString("&")}" else base
+            val params = PlaybackParams(
+                mediaType = mediaType,
+                mediaId = mediaId,
+                seasonNumber = seasonNumber,
+                episodeNumber = episodeNumber,
+                imdbId = imdbId,
+                streamUrl = streamUrl,
+                preferredAddonId = preferredAddonId,
+                preferredSourceName = preferredSourceName,
+                preferredBingeGroup = preferredBingeGroup,
+                startPositionMs = startPositionMs
+            )
+            val playbackId = PlaybackParamsStore.put(params)
+            return "player/$playbackId"
         }
     }
 }
@@ -402,83 +410,46 @@ fun AppNavigation(
         composable(
             route = Screen.Player.route,
             arguments = listOf(
-                navArgument("mediaType") { type = NavType.StringType },
-                navArgument("mediaId") { type = NavType.IntType },
-                navArgument("seasonNumber") { 
-                    type = NavType.IntType
-                    defaultValue = -1
-                },
-                navArgument("episodeNumber") { 
-                    type = NavType.IntType
-                    defaultValue = -1
-                },
-                navArgument("imdbId") {
-                    type = NavType.StringType
-                    defaultValue = ""
-                },
-                navArgument("streamUrl") { 
-                    type = NavType.StringType
-                    defaultValue = ""
-                },
-                navArgument("preferredAddonId") {
-                    type = NavType.StringType
-                    defaultValue = ""
-                },
-                navArgument("preferredSourceName") {
-                    type = NavType.StringType
-                    defaultValue = ""
-                },
-                navArgument("preferredBingeGroup") {
-                    type = NavType.StringType
-                    defaultValue = ""
-                },
-                navArgument("startPositionMs") {
-                    type = NavType.LongType
-                    defaultValue = -1L
-                }
+                navArgument("playbackId") { type = NavType.StringType }
             )
         ) { backStackEntry ->
-            val mediaTypeStr = backStackEntry.arguments?.getString("mediaType") ?: "movie"
-            val mediaId = backStackEntry.arguments?.getInt("mediaId") ?: 0
-            val seasonNumber = backStackEntry.arguments?.getInt("seasonNumber")?.takeIf { it >= 0 }
-            val episodeNumber = backStackEntry.arguments?.getInt("episodeNumber")?.takeIf { it >= 0 }
-            val imdbId = backStackEntry.arguments?.getString("imdbId")?.takeIf { it.isNotBlank() }
-            val streamUrl = backStackEntry.arguments?.getString("streamUrl")?.takeIf { it.isNotEmpty() }
-            val preferredAddonId = backStackEntry.arguments?.getString("preferredAddonId")?.takeIf { it.isNotBlank() }
-            val preferredSourceName = backStackEntry.arguments?.getString("preferredSourceName")?.takeIf { it.isNotBlank() }
-            val preferredBingeGroup = backStackEntry.arguments?.getString("preferredBingeGroup")?.takeIf { it.isNotBlank() }
-            val startPositionMs = backStackEntry.arguments?.getLong("startPositionMs")?.takeIf { it >= 0L }
-            val mediaType = if (mediaTypeStr == "tv") MediaType.TV else MediaType.MOVIE
-            
-            PlayerScreen(
-                mediaType = mediaType,
-                mediaId = mediaId,
-                seasonNumber = seasonNumber,
-                episodeNumber = episodeNumber,
-                imdbId = imdbId,
-                streamUrl = streamUrl,
-                preferredAddonId = preferredAddonId,
-                preferredSourceName = preferredSourceName,
-                preferredBingeGroup = preferredBingeGroup,
-                startPositionMs = startPositionMs,
-                onBack = { navController.popBackStack() },
-                onPlayNext = { nextSeason, nextEpisode, nextPreferredAddonId, nextPreferredSourceName, nextPreferredBingeGroup ->
-                    // Navigate to next episode
-                    navController.navigate(
-                        Screen.Player.createRoute(
-                            mediaType = mediaType,
-                            mediaId = mediaId,
-                            seasonNumber = nextSeason,
-                            episodeNumber = nextEpisode,
-                            preferredAddonId = nextPreferredAddonId,
-                            preferredSourceName = nextPreferredSourceName,
-                            preferredBingeGroup = nextPreferredBingeGroup
-                        )
-                    ) {
-                        popUpTo(Screen.Player.route) { inclusive = true }
+            val playbackId = backStackEntry.arguments?.getString("playbackId") ?: ""
+            val params = PlaybackParamsStore.consume(playbackId)
+
+            if (params != null) {
+                PlayerScreen(
+                    mediaType = params.mediaType,
+                    mediaId = params.mediaId,
+                    seasonNumber = params.seasonNumber,
+                    episodeNumber = params.episodeNumber,
+                    imdbId = params.imdbId,
+                    streamUrl = params.streamUrl,
+                    preferredAddonId = params.preferredAddonId,
+                    preferredSourceName = params.preferredSourceName,
+                    preferredBingeGroup = params.preferredBingeGroup,
+                    startPositionMs = params.startPositionMs,
+                    onBack = { navController.popBackStack() },
+                    onPlayNext = { nextSeason, nextEpisode, nextPreferredAddonId, nextPreferredSourceName, nextPreferredBingeGroup ->
+                        // Navigate to next episode
+                        navController.navigate(
+                            Screen.Player.createRoute(
+                                mediaType = params.mediaType,
+                                mediaId = params.mediaId,
+                                seasonNumber = nextSeason,
+                                episodeNumber = nextEpisode,
+                                preferredAddonId = nextPreferredAddonId,
+                                preferredSourceName = nextPreferredSourceName,
+                                preferredBingeGroup = nextPreferredBingeGroup
+                            )
+                        ) {
+                            popUpTo(Screen.Player.route) { inclusive = true }
+                        }
                     }
-                }
-            )
+                )
+            } else {
+                // Params lost (process death) — go back to home
+                navController.popBackStack()
+            }
         }
     }
 }

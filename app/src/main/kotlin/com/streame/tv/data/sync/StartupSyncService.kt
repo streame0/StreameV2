@@ -72,6 +72,52 @@ class StartupSyncService @Inject constructor(
         }
     }
 
+    /**
+     * Pull only the data for a specific scope — targeted sync.
+     * Used by [RealtimeSyncManager] when a realtime event indicates
+     * a change in only one table, avoiding a full pull of all 7+ tables.
+     */
+    suspend fun pullScope(scope: CloudSyncScope) {
+        if (!authManager.isAuthenticated) return
+        val profileId = resolveProfileIdFromManager()
+        try {
+            invalidationBus.suppressDuringRemoteApply {
+                when (scope) {
+                    CloudSyncScope.WATCH_PROGRESS -> {
+                        watchProgressSyncService.pullFromRemote(profileId)
+                    }
+                    CloudSyncScope.WATCHLIST -> {
+                        librarySyncService.pullFromRemote(profileId)
+                    }
+                    CloudSyncScope.WATCHED_ITEMS -> {
+                        watchedItemsSyncService.pullFromRemote(profileId)
+                    }
+                    CloudSyncScope.ADDONS -> {
+                        applyRemoteAddons(profileId)
+                    }
+                    CloudSyncScope.COLLECTIONS -> {
+                        collectionSyncService.pullFromRemote(profileId)
+                    }
+                    CloudSyncScope.PROFILE_SETTINGS -> {
+                        profileSettingsSyncService.pullFromRemote(profileId)
+                    }
+                    CloudSyncScope.HOME_CATALOG_SETTINGS, CloudSyncScope.CATALOGS -> {
+                        homeCatalogSettingsSyncService.pullFromRemote(profileId)
+                    }
+                    CloudSyncScope.PROFILES -> {
+                        profileSyncService.pullFromRemote()
+                    }
+                    CloudSyncScope.ACCOUNT -> {
+                        // No pull needed for account scope
+                    }
+                }
+            }
+            Log.d(TAG, "Targeted pull completed for scope: $scope")
+        } catch (e: Exception) {
+            Log.e(TAG, "Targeted pull failed for scope: $scope", e)
+        }
+    }
+
     suspend fun pullAllData() {
         if (!authManager.isAuthenticated) return
         try {
@@ -198,7 +244,7 @@ class StartupSyncService @Inject constructor(
 
     /**
      * Gather current data from all repositories and push to remote.
-     * Called by [CloudSyncCoordinator] when local data changes.
+     * Called by [CloudSyncCoordinator] when local data changes (fallback for less frequent scopes).
      */
     suspend fun pushAllDataFromRepositories() {
         if (!authManager.isAuthenticated) return
@@ -210,45 +256,11 @@ class StartupSyncService @Inject constructor(
             val addons = streamRepository.installedAddons.first()
             val addonUrls = addons.mapNotNull { it.url }
 
-            // Gather watch progress from cache
-            val progressEntries = watchHistoryRepository.getContinueWatching()
-            val progressItems = progressEntries.map { entry ->
-                com.streame.tv.data.remote.supabase.SupabaseWatchProgress(
-                    userId = userId,
-                    contentId = entry.show_tmdb_id.toString(),
-                    contentType = entry.media_type,
-                    videoId = if (entry.media_type == "tv") "${entry.show_tmdb_id}:${entry.season}:${entry.episode}" else entry.show_tmdb_id.toString(),
-                    season = entry.season,
-                    episode = entry.episode,
-                    position = entry.position_seconds ?: 0L,
-                    duration = entry.duration_seconds ?: 0L,
-                    lastWatched = System.currentTimeMillis(),
-                    progressKey = if (entry.media_type == "tv") "tv:${entry.show_tmdb_id}:${entry.season}:${entry.episode}" else "movie:${entry.show_tmdb_id}",
-                    profileId = profileId,
-                    lastAddonId = entry.last_addon_id,
-                    lastSourceName = entry.last_source_name,
-                    lastBingeGroup = entry.last_binge_group
-                )
-            }
+            // Gather watch progress via repository's getAllForPush()
+            val progressItems = watchHistoryRepository.getAllForPush()
 
-            // Gather library (watchlist) items
-            val watchlistItems = watchlistRepository.exportWatchlistForProfile(
-                profileManager.getProfileId().ifBlank { "default" }
-            )
-            val libraryItems = watchlistItems.map { local ->
-                com.streame.tv.data.remote.supabase.SupabaseLibraryItem(
-                    contentId = local.tmdbId.toString(),
-                    contentType = local.mediaType,
-                    name = local.title,
-                    poster = local.posterPath,
-                    posterShape = "POSTER",
-                    background = local.backdropPath,
-                    description = null,
-                    releaseInfo = null,
-                    imdbRating = null,
-                    profileId = profileId
-                )
-            }
+            // Gather library (watchlist) items via repository's getAllForPush()
+            val libraryItems = watchlistRepository.getAllForPush()
 
             // Gather watched items from Trakt
             val watchedMovies = traktRepository.exportLocalWatchedMoviesForProfiles(

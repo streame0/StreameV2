@@ -17,12 +17,15 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import coil.ImageLoader
-import coil.ImageLoaderFactory
-import coil.decode.GifDecoder
-import coil.decode.ImageDecoderDecoder
-import coil.disk.DiskCache
-import coil.memory.MemoryCache
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.gif.AnimatedImageDecoder
+import coil3.gif.GifDecoder
+import coil3.disk.DiskCache
+import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import okio.Path.Companion.toPath
+import coil3.request.*
 import com.streame.tv.network.OkHttpProvider
 import com.streame.tv.data.repository.AuthRepository
 import com.streame.tv.data.repository.AuthState
@@ -52,7 +55,7 @@ import javax.inject.Inject
  * Streame TV Application class
  */
 @HiltAndroidApp
-class StreameApplication : Application(), Configuration.Provider, ImageLoaderFactory {
+class StreameApplication : Application(), Configuration.Provider, SingletonImageLoader.Factory {
     private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
         AppLogger.e("AppScope", "Unhandled coroutine exception", throwable)
     }
@@ -68,6 +71,8 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
     lateinit var authRepository: AuthRepository
     @Inject
     lateinit var watchlistRepository: WatchlistRepository
+    @Inject
+    lateinit var watchHistoryRepository: com.streame.tv.data.repository.WatchHistoryRepository
     @Inject
     lateinit var startupSyncService: com.streame.tv.data.sync.StartupSyncService
     @Inject
@@ -165,30 +170,42 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             CrashlyticsProvider.initialize()
         }
         // Initialize active profile asynchronously to avoid blocking cold start.
-
+        // All independent startup tasks run in parallel for faster cold start.
         appScope.launch {
+            // Profile init must complete first — other tasks depend on it
             runCatching { profileManager.initialize() }
-            // Preload watchlist cache in background for instant display
-            runCatching { watchlistRepository.getWatchlistItems() }
-            // Kick off Supabase cloud sync if authenticated
-            runCatching { startupSyncService.pullAllData() }
-            // Start realtime WebSocket + auto-push coordinator
-            runCatching {
-                cloudSyncCoordinator.start()
-                realtimeSyncManager.start()
+
+            // After profile is ready, launch all independent tasks in parallel
+            kotlinx.coroutines.coroutineScope {
+                launch { runCatching { watchlistRepository.getWatchlistItems() } }
+                launch { runCatching { watchHistoryRepository.loadFromRoom() } }
+                launch { runCatching { startupSyncService.pullAllData() } }
+                launch {
+                    runCatching {
+                        cloudSyncCoordinator.start()
+                        realtimeSyncManager.start()
+                    }
+                }
             }
         }
     }
 
-    override fun newImageLoader(): ImageLoader {
+    override fun newImageLoader(context: android.content.Context): ImageLoader {
         val isTvDevice = detectDeviceType(this) == DeviceType.TV
         val isLowRamDevice = isLowRamDevice()
         return ImageLoader.Builder(this)
             // Use the dedicated Coil HTTP client instead of the main API client.
             // Avoids logging interceptor overhead and connection pool contention.
-            .okHttpClient(OkHttpProvider.coilClient)
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { OkHttpProvider.coilClient }))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    add(AnimatedImageDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
+            }
             .memoryCache {
-                MemoryCache.Builder(this)
+                MemoryCache.Builder()
                     // Increased memory budgets: more in-memory bitmaps = fewer
                     // disk reads and network fetches during scrolling.
                     // Low-RAM TVs stay conservative to avoid zram pressure.
@@ -203,7 +220,7 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
             }
             .diskCache {
                 DiskCache.Builder()
-                    .directory(cacheDir.resolve("image_cache"))
+                    .directory(cacheDir.resolve("image_cache").absolutePath.toPath())
                     // Increased disk cache to avoid evictions between sessions.
                     // A typical home screen touches 30-50MB per session.
                     .maxSizeBytes(
@@ -215,23 +232,13 @@ class StreameApplication : Application(), Configuration.Provider, ImageLoaderFac
                     )
                     .build()
             }
-            .crossfade(false)
-            .respectCacheHeaders(false)
-            .allowRgb565(true)
-            .bitmapConfig(Bitmap.Config.RGB_565)
             // No global placeholder — card composables use their own surface
             // background color as the visual placeholder. A global placeholder
             // causes a dark-rectangle flash behind transparent clearlogo PNGs
             // on the home hero. Error = transparent so failed loads are invisible
             // (the card surface background is the fallback visual).
-            .error(android.R.color.transparent)
-            .components {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    add(ImageDecoderDecoder.Factory())
-                } else {
-                    add(GifDecoder.Factory())
-                }
-            }
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .memoryCachePolicy(CachePolicy.ENABLED)
             .build()
             .also { appImageLoader = it }
     }

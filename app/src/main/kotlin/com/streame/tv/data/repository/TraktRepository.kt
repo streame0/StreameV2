@@ -473,7 +473,9 @@ class TraktRepository @Inject constructor(
         try {
             val traktShowId = tmdbToTraktIdCache[showTmdbId]
             syncService.markEpisodeWatched(showTmdbId, season, episode, traktShowId)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppLogger.e("TraktRepo", "Failed to mark episode watched on Trakt", e)
+        }
     }
 
     /**
@@ -752,7 +754,9 @@ class TraktRepository @Inject constructor(
                     watchedEpisodesCache.addAll(directKeys)
                     return watchedEpisodesCache.filter { it.startsWith(prefix) }.toSet()
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                AppLogger.e("TraktRepo", "Failed to query watched episodes from sync service", e)
+            }
 
             return result
         }
@@ -1768,7 +1772,8 @@ class TraktRepository @Inject constructor(
             val type = TypeToken.getParameterized(MutableList::class.java, ContinueWatchingItem::class.java).type
             val items: List<ContinueWatchingItem> = gson.fromJson(json, type)
             items.distinctBy { "${it.mediaType}:${it.id}" }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.e("TraktRepo", "Failed to decode continue watching list", e)
             emptyList()
         }
     }
@@ -1779,7 +1784,8 @@ class TraktRepository @Inject constructor(
             val type = TypeToken.getParameterized(MutableList::class.java, Int::class.javaObjectType).type
             val items: List<Int> = gson.fromJson(json, type)
             items.distinct()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.e("TraktRepo", "Failed to decode int list", e)
             emptyList()
         }
     }
@@ -1790,7 +1796,8 @@ class TraktRepository @Inject constructor(
             val type = TypeToken.getParameterized(MutableList::class.java, String::class.java).type
             val items: List<String> = gson.fromJson(json, type)
             items.filter { it.isNotBlank() }.distinct()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.e("TraktRepo", "Failed to decode string list", e)
             emptyList()
         }
     }
@@ -1986,6 +1993,7 @@ class TraktRepository @Inject constructor(
         return try {
             java.time.Instant.parse(dateString).toEpochMilli()
         } catch (e: Exception) {
+            AppLogger.e("TraktRepo", "Failed to parse ISO 8601 date string", e)
             0L
         }
     }
@@ -2130,7 +2138,8 @@ class TraktRepository @Inject constructor(
                 .type
             val parsed: List<ContinueWatchingItem> = gson.fromJson(json, type)
             parsed
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.e("TraktRepo", "Failed to load continue watching cache", e)
             emptyList()
         }
     }
@@ -2220,7 +2229,8 @@ class TraktRepository @Inject constructor(
                     limit = limit,
                     sort = "added"
                 )
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppLogger.e("TraktRepo", "Watchlist fetch page failed (type=$type)", e)
                 return WatchlistFetchResult(all, complete = false)
             }
 
@@ -2262,7 +2272,8 @@ class TraktRepository @Inject constructor(
                     limit = limit,
                     sort = null
                 )
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppLogger.e("TraktRepo", "Watchlist fallback fetch page failed", e)
                 return WatchlistFetchResult(all, complete = false)
             }
 
@@ -3306,8 +3317,8 @@ class TraktRepository @Inject constructor(
                     watchedEpisodesCache.addAll(localSnapshotEpisodes)
                 }
                 cacheInitialized = true
-            } catch (_: Exception) {
-                // No data available - mark as initialized with empty caches
+            } catch (e: Exception) {
+                AppLogger.e("TraktRepo", "Failed to initialize watched cache", e)
                 cacheInitialized = true
             }
         } finally {

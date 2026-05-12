@@ -8,7 +8,7 @@ import android.widget.EditText
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.streame.tv.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.ui.input.pointer.pointerInput
@@ -77,6 +77,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.SwitchAccount
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.activity.compose.BackHandler
 import androidx.compose.material3.Icon
@@ -489,6 +490,20 @@ fun SettingsScreen(
         uiState.showUnknownSourcesDialog ||
         (uiState.pendingCloudstreamManifest != null && uiState.pendingCloudstreamRepoUrl != null)
 
+    // BackHandler for zone-based back navigation — prevents double-back
+    BackHandler(enabled = !hasBlockingModal) {
+        when (activeZone) {
+            Zone.SIDEBAR -> onBack()
+            Zone.SECTION -> {
+                activeZone = Zone.SIDEBAR
+                isSidebarFocused = true
+            }
+            Zone.CONTENT -> {
+                activeZone = Zone.SECTION
+            }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -508,7 +523,8 @@ fun SettingsScreen(
                         !(addon.id == "opensubtitles" && addon.type == com.streame.tv.data.model.AddonType.SUBTITLE)
                     } ?: false
                     when (event.key) {
-                        Key.Back, Key.Escape -> {
+                        // Key.Back handled by BackHandler — not here
+                        Key.Escape -> {
                             when (activeZone) {
                                 Zone.SIDEBAR -> onBack()
                                 Zone.SECTION -> {
@@ -924,6 +940,8 @@ fun SettingsScreen(
                             subtitleSize = uiState.subtitleSize,
                             subtitleColor = uiState.subtitleColor,
                             deviceModeOverride = uiState.deviceModeOverride,
+                            themeVariant = uiState.themeVariant,
+                            experienceMode = uiState.experienceMode,
                             skipProfileSelection = uiState.skipProfileSelection,
                             clockFormat = uiState.clockFormat,
                             showBudget = uiState.showBudget,
@@ -941,6 +959,18 @@ fun SettingsScreen(
                             trailerAutoPlay = uiState.trailerAutoPlay,
                             onTrailerAutoPlayToggle = { viewModel.setTrailerAutoPlay(it) },
                             onDeviceModeClick = openUiModeWarningDialog,
+                            onThemeVariantClick = {
+                                val next = when (uiState.themeVariant) {
+                                    "arctic" -> "oled"
+                                    "oled" -> "dimmer"
+                                    else -> "arctic"
+                                }
+                                viewModel.setThemeVariant(next)
+                            },
+                            onExperienceModeClick = {
+                                val next = if (uiState.experienceMode == "advanced") "essential" else "advanced"
+                                viewModel.setExperienceMode(next)
+                            },
                             onContentLanguageClick = openContentLanguagePicker,
                             onSkipProfileSelectionToggle = { viewModel.setSkipProfileSelection(it) },
                             onClockFormatClick = { viewModel.cycleClockFormat() },
@@ -2169,6 +2199,34 @@ private fun MobileSettingsSubPage(
                         onClick = openUiModeWarningDialog
                     )
                     MobileSettingsRow(
+                        icon = Icons.Default.Palette,
+                        title = "Theme",
+                        value = when (uiState.themeVariant) {
+                            "oled" -> "OLED"
+                            "dimmer" -> "Dimmer"
+                            else -> "Arctic"
+                        },
+                        isFocused = false,
+                        onClick = {
+                            val next = when (uiState.themeVariant) {
+                                "arctic" -> "oled"
+                                "oled" -> "dimmer"
+                                else -> "arctic"
+                            }
+                            viewModel.setThemeVariant(next)
+                        }
+                    )
+                    MobileSettingsRow(
+                        icon = Icons.Default.Tune,
+                        title = "Experience",
+                        value = if (uiState.experienceMode == "essential") "Essential" else "Advanced",
+                        isFocused = false,
+                        onClick = {
+                            val next = if (uiState.experienceMode == "advanced") "essential" else "advanced"
+                            viewModel.setExperienceMode(next)
+                        }
+                    )
+                    MobileSettingsRow(
                         icon = Icons.Default.Widgets,
                         title = stringResource(R.string.card_layout),
                         value = uiState.cardLayoutMode,
@@ -2656,6 +2714,8 @@ private fun GeneralSettings(
     subtitleSize: String = "Medium",
     subtitleColor: String = "White",
     deviceModeOverride: String = "auto",
+    themeVariant: String = "arctic",
+    experienceMode: String = "advanced",
     skipProfileSelection: Boolean = false,
     clockFormat: String = "24h",
     showBudget: Boolean = true,
@@ -2671,6 +2731,8 @@ private fun GeneralSettings(
     onAutoPlaySingleSourceToggle: (Boolean) -> Unit,
     onAutoPlayMinQualityClick: () -> Unit,
     onDeviceModeClick: () -> Unit = {},
+    onThemeVariantClick: () -> Unit = {},
+    onExperienceModeClick: () -> Unit = {},
     onContentLanguageClick: () -> Unit = {},
     onSkipProfileSelectionToggle: (Boolean) -> Unit = {},
     onClockFormatClick: () -> Unit = {},
@@ -2810,6 +2872,8 @@ private fun GeneralSettings(
             onToggle = onTrailerAutoPlayToggle,
             modifier = Modifier.settingsFocusSlot(10)
         )
+        // â”€â”€ Advanced: Frame rate & quality filters (hidden in Essential mode) â”€â”€
+        if (experienceMode == "advanced") {
         Spacer(modifier = Modifier.height(10.dp))
         SettingsRow(
             icon = Icons.Default.Movie,
@@ -2830,6 +2894,7 @@ private fun GeneralSettings(
             onClick = onQualityFiltersClick,
             modifier = Modifier.settingsFocusSlot(12)
         )
+        } // end advanced-only
 
         // â”€â”€ Interface â”€â”€
         Spacer(modifier = Modifier.height(24.dp))
@@ -2865,13 +2930,37 @@ private fun GeneralSettings(
             modifier = Modifier.settingsFocusSlot(14)
         )
         Spacer(modifier = Modifier.height(10.dp))
+        SettingsRow(
+            icon = Icons.Default.Palette,
+            title = "Theme",
+            subtitle = "Visual appearance variant",
+            value = when (themeVariant) {
+                "oled" -> "OLED"
+                "dimmer" -> "Dimmer"
+                else -> "Arctic"
+            },
+            isFocused = focusedIndex == 15,
+            onClick = onThemeVariantClick,
+            modifier = Modifier.settingsFocusSlot(15)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsRow(
+            icon = Icons.Default.Tune,
+            title = "Experience",
+            subtitle = "Essential hides advanced settings",
+            value = if (experienceMode == "essential") "Essential" else "Advanced",
+            isFocused = focusedIndex == 16,
+            onClick = onExperienceModeClick,
+            modifier = Modifier.settingsFocusSlot(16)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
         SettingsToggleRow(
             title = stringResource(R.string.skip_profile),
             subtitle = stringResource(R.string.skip_profile_desc),
             isEnabled = skipProfileSelection,
-            isFocused = focusedIndex == 15,
+            isFocused = focusedIndex == 17,
             onToggle = onSkipProfileSelectionToggle,
-            modifier = Modifier.settingsFocusSlot(15)
+            modifier = Modifier.settingsFocusSlot(17)
         )
         Spacer(modifier = Modifier.height(10.dp))
         SettingsRow(
@@ -2879,10 +2968,12 @@ private fun GeneralSettings(
             title = stringResource(R.string.clock_format),
             subtitle = stringResource(R.string.clock_format_desc),
             value = if (clockFormat == "12h") "12-hour" else "24-hour",
-            isFocused = focusedIndex == 16,
+            isFocused = focusedIndex == 18,
             onClick = onClockFormatClick,
-            modifier = Modifier.settingsFocusSlot(16)
+            modifier = Modifier.settingsFocusSlot(18)
         )
+        // â”€â”€ Advanced: Show budget toggle (hidden in Essential mode) â”€â”€
+        if (experienceMode == "advanced") {
         Spacer(modifier = Modifier.height(10.dp))
         // Home hero controls â€” issue #72. The movie Budget line on the hero banner
         // makes the metadata row noisy on small screens and some users want to hide it.
@@ -2890,12 +2981,14 @@ private fun GeneralSettings(
             title = stringResource(R.string.show_budget),
             subtitle = stringResource(R.string.show_budget_desc),
             isEnabled = showBudget,
-            isFocused = focusedIndex == 17,
+            isFocused = focusedIndex == 19,
             onToggle = onShowBudgetToggle,
-            modifier = Modifier.settingsFocusSlot(17)
+            modifier = Modifier.settingsFocusSlot(19)
         )
+        } // end advanced-only
 
-        // â”€â”€ Network â”€â”€
+        // â”€â”€ Network & Audio (entire sections hidden in Essential mode)
+        if (experienceMode == "advanced") {
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = stringResource(R.string.network),
@@ -2909,18 +3002,18 @@ private fun GeneralSettings(
             title = stringResource(R.string.dns_provider),
             subtitle = stringResource(R.string.dns_desc),
             value = dnsProvider,
-            isFocused = focusedIndex == 18,
+            isFocused = focusedIndex == 20,
             onClick = onDnsProviderClick,
-            modifier = Modifier.settingsFocusSlot(18)
+            modifier = Modifier.settingsFocusSlot(20)
         )
         Spacer(modifier = Modifier.height(10.dp))
         SettingsToggleRow(
             title = stringResource(R.string.show_loading_stats),
             subtitle = stringResource(R.string.show_loading_stats_desc),
             isEnabled = showLoadingStats,
-            isFocused = focusedIndex == 19,
+            isFocused = focusedIndex == 21,
             onToggle = onShowLoadingStatsToggle,
-            modifier = Modifier.settingsFocusSlot(19)
+            modifier = Modifier.settingsFocusSlot(21)
         )
 
         // â”€â”€ Audio â”€â”€
@@ -2940,10 +3033,11 @@ private fun GeneralSettings(
                 0 -> "Off"
                 else -> "+${volumeBoostDb} dB"
             },
-            isFocused = focusedIndex == 20,
+            isFocused = focusedIndex == 22,
             onClick = onVolumeBoostClick,
-            modifier = Modifier.settingsFocusSlot(20)
+            modifier = Modifier.settingsFocusSlot(22)
         )
+        } // end advanced-only (Network & Audio)
     }
 }
 
