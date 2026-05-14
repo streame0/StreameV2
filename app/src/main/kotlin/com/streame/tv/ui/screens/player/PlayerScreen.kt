@@ -189,6 +189,7 @@ fun PlayerScreen(
     preferredAddonId: String? = null,
     preferredSourceName: String? = null,
     preferredBingeGroup: String? = null,
+    selectedStream: StreamSource? = null,
     startPositionMs: Long? = null,
     viewModel: PlayerViewModel = hiltViewModel(),
     onBack: () -> Unit = {},
@@ -382,7 +383,7 @@ fun PlayerScreen(
         autoAdvanceAttempts = 0
         triedStreamIndexes = emptySet()
         isAutoAdvancing = false
-        userSelectedSourceManually = false
+        userSelectedSourceManually = selectedStream != null
         viewModel.loadMedia(
             mediaType = mediaType,
             mediaId = mediaId,
@@ -393,7 +394,8 @@ fun PlayerScreen(
             preferredAddonId = preferredAddonId,
             preferredSourceName = preferredSourceName,
             preferredBingeGroup = preferredBingeGroup,
-            startPositionMs = startPositionMs
+            startPositionMs = startPositionMs,
+            selectedStream = selectedStream
         )
     }
 
@@ -767,7 +769,8 @@ fun PlayerScreen(
                                 error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
                             if (!hasPlaybackStarted &&
                                 allowStartupSourceFallback &&
-                                (!userSelectedSourceManually || isUnrecoverableSource) &&
+                                !userSelectedSourceManually &&
+                                isUnrecoverableSource &&
                                 tryAdvanceToNextStream()
                             ) {
                                 return

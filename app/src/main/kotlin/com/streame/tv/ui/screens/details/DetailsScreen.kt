@@ -122,6 +122,7 @@ import com.streame.tv.data.model.Episode
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
 import com.streame.tv.data.model.Review
+import com.streame.tv.data.model.StreamSource
 import com.streame.tv.network.OkHttpProvider
 import com.streame.tv.ui.components.EpisodeContextMenu
 import com.streame.tv.ui.components.SeasonContextMenu
@@ -180,7 +181,7 @@ fun DetailsScreen(
     initialEpisode: Int? = null,
     viewModel: DetailsViewModel = hiltViewModel(),
     currentProfile: com.streame.tv.data.model.Profile? = null,
-    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?) -> Unit,
+    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?, StreamSource?) -> Unit,
     onNavigateToDetails: (MediaType, Int) -> Unit,
     onNavigateToHome: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
@@ -329,7 +330,8 @@ fun DetailsScreen(
                     singleStream.addonId.takeIf { it.isNotBlank() },
                     singleStream.source.takeIf { it.isNotBlank() },
                     singleStream.behaviorHints?.bingeGroup?.takeIf { it.isNotBlank() },
-                    request.startPositionMs
+                    request.startPositionMs,
+                    singleStream
                 )
             }
             validStreams.size > 1 || uiState.streams.isNotEmpty() -> {
@@ -584,7 +586,8 @@ fun DetailsScreen(
                                                     uiState.lastAddonId,
                                                     uiState.lastSourceName,
                                                     uiState.lastBingeGroup,
-                                                    startPositionMs
+                                                    startPositionMs,
+                                                    null
                                                 )
                                             }
                                         }
@@ -612,7 +615,7 @@ fun DetailsScreen(
                                         } else {
                                             onNavigateToPlayer(
                                                 mediaType, mediaId,
-                                                ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null, null
+                                                ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null, null, null
                                             )
                                         }
                                     }
@@ -758,7 +761,8 @@ fun DetailsScreen(
                                         uiState.lastAddonId,
                                         uiState.lastSourceName,
                                         uiState.lastBingeGroup,
-                                        startPositionMs
+                                        startPositionMs,
+                                        null
                                     )
                                 }
                             }
@@ -785,13 +789,13 @@ fun DetailsScreen(
                         val ep = uiState.episodes.getOrNull(idx)
                         if (ep != null) {
                             episodeIndex = idx
-                            if (isMobile || !uiState.autoPlaySingleSource) {
+                            if (!uiState.autoPlaySingleSource) {
                                 showStreamSelector = true
                                 viewModel.loadStreams(uiState.imdbId, ep.seasonNumber, ep.episodeNumber)
                             } else {
                                 onNavigateToPlayer(
                                     mediaType, mediaId,
-                                    ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null, null
+                                    ep.seasonNumber, ep.episodeNumber, uiState.imdbId, null, null, null, null, null, null
                                 )
                             }
                         }
@@ -903,7 +907,8 @@ fun DetailsScreen(
                     stream.addonId.takeIf { it.isNotBlank() },
                     stream.source.takeIf { it.isNotBlank() },
                     stream.behaviorHints?.bingeGroup?.takeIf { it.isNotBlank() },
-                    null
+                    null,
+                    stream
                 )
             },
             onClose = { showStreamSelector = false }
@@ -924,7 +929,7 @@ fun DetailsScreen(
                     } else {
                         onNavigateToPlayer(
                             mediaType, mediaId,
-                            episode.seasonNumber, episode.episodeNumber, uiState.imdbId, null, null, null, null, null
+                            episode.seasonNumber, episode.episodeNumber, uiState.imdbId, null, null, null, null, null, null
                         )
                     }
                 },

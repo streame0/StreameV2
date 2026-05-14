@@ -126,6 +126,7 @@ import com.streame.tv.data.model.CatalogConfig
 import com.streame.tv.data.model.CollectionTileShape
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
+import com.streame.tv.data.model.StreamSource
 import com.streame.tv.network.OkHttpProvider
 import com.streame.tv.ui.components.MediaCard as StreameMediaCard
 import com.streame.tv.ui.components.TrailerPlayer
@@ -467,7 +468,7 @@ fun HomeScreen(
     currentProfile: com.streame.tv.data.model.Profile? = null,
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit = { _, _, _, _ -> },
     onNavigateToCollection: (String) -> Unit = {},
-    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
+    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?, StreamSource?) -> Unit = { _, _, _, _, _, _, _, _, _, _, _ -> },
     onNavigateToSearch: () -> Unit = {},
     onNavigateToWatchlist: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
@@ -2033,7 +2034,7 @@ private fun HomeInputLayer(
     onSwitchProfile: () -> Unit,
     onExitApp: () -> Unit,
     onOpenContextMenu: (MediaItem, Boolean) -> Unit,
-    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
+    onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?, StreamSource?) -> Unit = { _, _, _, _, _, _, _, _, _, _, _ -> },
 ) {
     val focusRequester = remember { FocusRequester() }
     var selectPressedInHome by remember { mutableStateOf(false) }
@@ -2379,7 +2380,8 @@ private fun HomeInputLayer(
                         null, // imdbId - player will resolve
                         null, // streamUrl - player will resolve
                         item.lastAddonId, item.lastSourceName, item.lastBingeGroup,
-                        null // startPositionMs - PlayerViewModel.resolveResumeData handles it
+                        null, // startPositionMs - PlayerViewModel.resolveResumeData handles it
+                        null
                     )
                 } else {
                     onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)

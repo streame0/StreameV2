@@ -1,6 +1,7 @@
 package com.streame.tv.navigation
 
 import com.streame.tv.data.model.MediaType
+import com.streame.tv.data.model.StreamSource
 
 /**
  * Holds all playback parameters for a single player session.
@@ -17,7 +18,8 @@ data class PlaybackParams(
     val preferredAddonId: String? = null,
     val preferredSourceName: String? = null,
     val preferredBingeGroup: String? = null,
-    val startPositionMs: Long? = null
+    val startPositionMs: Long? = null,
+    val selectedStream: StreamSource? = null
 )
 
 /**

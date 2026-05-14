@@ -2658,10 +2658,14 @@ class StreamRepository @Inject constructor(
      */
     private suspend fun resolveStreamInternal(stream: StreamSource): StreamSource? {
         val url = stream.url?.trim().orEmpty()
-        if (url.isBlank()) return null
+        if (url.isBlank()) {
+            val magnet = buildMagnetForStream(stream) ?: return null
+            return resolveTorrentViaTorrServer(stream, magnet)
+        }
 
-        // Debrid/direct-only playback path: ignore magnet/infoHash-only P2P streams.
-        if (url.startsWith("magnet:", ignoreCase = true)) return null
+        if (url.startsWith("magnet:", ignoreCase = true)) {
+            return resolveTorrentViaTorrServer(stream, url)
+        }
 
         val normalizedUrl = when {
             url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true) -> url

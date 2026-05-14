@@ -21,6 +21,7 @@ import com.streame.tv.data.model.Category
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
 import com.streame.tv.data.model.Profile
+import com.streame.tv.data.model.StreamSource
 import com.streame.tv.data.repository.AuthState
 import com.streame.tv.ui.screens.details.DetailsScreen
 import com.streame.tv.ui.screens.home.HomeScreen
@@ -80,7 +81,8 @@ sealed class Screen(val route: String) {
             preferredAddonId: String? = null,
             preferredSourceName: String? = null,
             preferredBingeGroup: String? = null,
-            startPositionMs: Long? = null
+            startPositionMs: Long? = null,
+            selectedStream: StreamSource? = null
         ): String {
             val params = PlaybackParams(
                 mediaType = mediaType,
@@ -92,7 +94,8 @@ sealed class Screen(val route: String) {
                 preferredAddonId = preferredAddonId,
                 preferredSourceName = preferredSourceName,
                 preferredBingeGroup = preferredBingeGroup,
-                startPositionMs = startPositionMs
+                startPositionMs = startPositionMs,
+                selectedStream = selectedStream
             )
             val playbackId = PlaybackParamsStore.put(params)
             return "player/$playbackId"
@@ -173,7 +176,7 @@ fun AppNavigation(
                 onNavigateToCollection = { catalogId ->
                     navController.navigate(Screen.CollectionDetails.createRoute(catalogId))
                 },
-                onNavigateToPlayer = { type, id, season, episode, imdbId, url, preferredAddonId, preferredSourceName, preferredBingeGroup, startPositionMs ->
+                onNavigateToPlayer = { type, id, season, episode, imdbId, url, preferredAddonId, preferredSourceName, preferredBingeGroup, startPositionMs, selectedStream ->
                     navController.navigate(
                         Screen.Player.createRoute(
                             mediaType = type,
@@ -185,7 +188,8 @@ fun AppNavigation(
                             preferredAddonId = preferredAddonId,
                             preferredSourceName = preferredSourceName,
                             preferredBingeGroup = preferredBingeGroup,
-                            startPositionMs = startPositionMs
+                            startPositionMs = startPositionMs,
+                            selectedStream = selectedStream
                         )
                     )
                 },
@@ -337,7 +341,7 @@ fun AppNavigation(
                 initialSeason = initialSeason,
                 initialEpisode = initialEpisode,
                 currentProfile = currentProfile,
-                onNavigateToPlayer = { type, id, season, episode, imdbId, url, preferredAddonId, preferredSourceName, preferredBingeGroup, startPositionMs ->
+                onNavigateToPlayer = { type, id, season, episode, imdbId, url, preferredAddonId, preferredSourceName, preferredBingeGroup, startPositionMs, selectedStream ->
                     navController.navigate(
                         Screen.Player.createRoute(
                             mediaType = type,
@@ -349,7 +353,8 @@ fun AppNavigation(
                             preferredAddonId = preferredAddonId,
                             preferredSourceName = preferredSourceName,
                             preferredBingeGroup = preferredBingeGroup,
-                            startPositionMs = startPositionMs
+                            startPositionMs = startPositionMs,
+                            selectedStream = selectedStream
                         )
                     )
                 },
@@ -402,6 +407,7 @@ fun AppNavigation(
                     preferredAddonId = params.preferredAddonId,
                     preferredSourceName = params.preferredSourceName,
                     preferredBingeGroup = params.preferredBingeGroup,
+                    selectedStream = params.selectedStream,
                     startPositionMs = params.startPositionMs,
                     onBack = { navController.popBackStack() },
                     onPlayNext = { nextSeason, nextEpisode, nextPreferredAddonId, nextPreferredSourceName, nextPreferredBingeGroup ->

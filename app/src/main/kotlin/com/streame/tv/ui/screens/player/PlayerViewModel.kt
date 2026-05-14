@@ -244,7 +244,8 @@ class PlayerViewModel @Inject constructor(
         preferredSourceName: String?,
         preferredBingeGroup: String?,
         startPositionMs: Long?,
-        airDate: String? = null
+        airDate: String? = null,
+        selectedStream: StreamSource? = null
     ) {
         currentAirDate = airDate
         currentMediaType = mediaType
@@ -257,7 +258,7 @@ class PlayerViewModel @Inject constructor(
         currentPreferredBingeGroup = preferredBingeGroup?.trim()?.takeIf { it.isNotBlank() }
         currentEpisodeTitle = null
         hasMarkedWatched = false
-        userManuallySelectedStream = false
+        userManuallySelectedStream = selectedStream != null
         hasManualSubtitleSelection = false
         aiSourceSubtitle = null
         aiErrorToastShown = false
@@ -320,8 +321,19 @@ class PlayerViewModel @Inject constructor(
                 volumeBoostDb = volumeBoostDb
             )
 
-            // If stream URL provided, use it directly (except magnet links, which require resolution).
-            if (providedStreamUrl != null) {
+            // If an exact stream was passed from the source picker, honor that row.
+            // A manual source choice should never degrade into autoplaying a different stream.
+            val selectedOrProvidedStream = selectedStream ?: providedStreamUrl?.let { url ->
+                StreamSource(
+                    source = currentPreferredSourceName ?: "Selected source",
+                    addonName = currentPreferredAddonId ?: "",
+                    addonId = currentPreferredAddonId.orEmpty(),
+                    quality = "",
+                    size = "",
+                    url = url
+                )
+            }
+            if (selectedOrProvidedStream != null) {
                 val resumeData = resolveResumeData(
                     mediaType = mediaType,
                     mediaId = mediaId,
@@ -329,30 +341,19 @@ class PlayerViewModel @Inject constructor(
                     episodeNumber = episodeNumber,
                     navigationStartPositionMs = startPositionMs
                 )
-                val isMagnet = providedStreamUrl.startsWith("magnet:", ignoreCase = true)
-                val providedStream = if (isMagnet) {
-                    null
-                } else {
-                    StreamSource(
-                        source = currentPreferredSourceName ?: "Selected source",
-                        addonName = currentPreferredAddonId ?: "",
-                        addonId = currentPreferredAddonId.orEmpty(),
-                        quality = "",
-                        size = "",
-                        url = providedStreamUrl
-                    )
-                }
-                val resolvedProvidedStream = providedStream?.let { stream ->
-                    runCatching { streamRepository.resolveStreamForPlayback(stream) }.getOrNull() ?: stream
-                }
-                val resolvedProvidedUrl = resolvedProvidedStream?.url ?: if (isMagnet) null else providedStreamUrl
+                val resolvedProvidedStream = runCatching {
+                    streamRepository.resolveStreamForPlayback(selectedOrProvidedStream)
+                }.getOrNull() ?: selectedOrProvidedStream.takeIf { !it.url.isNullOrBlank() }
+                val resolvedProvidedUrl = resolvedProvidedStream?.url
 
                 if (resolvedProvidedUrl.isNullOrBlank()) {
+                    val isP2p = !selectedOrProvidedStream.infoHash.isNullOrBlank() ||
+                        selectedOrProvidedStream.url?.startsWith("magnet:", ignoreCase = true) == true
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         isLoadingStreams = false,
-                        error = if (isMagnet) {
-                            "Selected source is P2P (magnet) and not supported. Choose an HTTP/debrid source."
+                        error = if (isP2p) {
+                            "Selected P2P source requires TorrServer. Install TorrServer and set its URL in Settings > Addons, or choose another source."
                         } else {
                             "Failed to open selected source. Try another one."
                         }
