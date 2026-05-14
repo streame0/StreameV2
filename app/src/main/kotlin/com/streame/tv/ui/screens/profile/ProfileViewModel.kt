@@ -9,7 +9,6 @@ import com.streame.tv.data.repository.ProfileRepository
 import com.streame.tv.data.repository.TraktRepository
 import com.streame.tv.data.repository.WatchHistoryRepository
 import com.streame.tv.data.repository.WatchlistRepository
-import com.streame.tv.domain.repository.SyncRepository
 import com.streame.tv.ui.components.ToastType
 import com.streame.tv.util.AppLogger
 import com.streame.tv.util.PinUtil
@@ -53,11 +52,9 @@ data class ProfileUiState(
 class ProfileViewModel @Inject constructor(
     private val profileRepository: ProfileRepository,
     private val profileManager: ProfileManager,
-    private val authManager: com.streame.tv.data.repository.AuthManager,
     private val traktRepository: TraktRepository,
     private val watchHistoryRepository: WatchHistoryRepository,
-    private val watchlistRepository: WatchlistRepository,
-    private val syncRepository: SyncRepository
+    private val watchlistRepository: WatchlistRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProfileUiState())
@@ -139,14 +136,6 @@ class ProfileViewModel @Inject constructor(
                 // for any work started after selection.
                 profileManager.setCurrentProfileId(profile.id)
                 profileManager.setCurrentProfileName(profile.name)
-
-                // Per-profile cloud auth: if the new profile's linked cloud user
-                // doesn't match the currently signed-in cloud user, sign out.
-                // The user can sign in with their own account from the new profile.
-                val currentCloudUser = authManager.currentUserId
-                if (currentCloudUser != null && currentCloudUser != profile.cloudUserId) {
-                    authManager.signOut()
-                }
 
                 // Activate any preloaded Continue Watching cache for instant Home population.
                 traktRepository.activatePreloadedCache(profile.id)
@@ -370,7 +359,6 @@ class ProfileViewModel @Inject constructor(
 
     fun setupProfilePin(pin: String) {
         val profile = _uiState.value.editingProfile ?: return
-        // Hash the PIN before storing
         val hashedPin = PinUtil.hashPin(pin)
         val updatedProfile = profile.copy(pin = hashedPin, isLocked = true)
         viewModelScope.launch {
@@ -378,13 +366,6 @@ class ProfileViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(editingProfile = updatedProfile)
             hidePinDialog()
             showToast("Profile PIN set successfully", ToastType.SUCCESS)
-            // Sync PIN to cloud
-            try {
-                val profileIndex = _uiState.value.profiles.indexOf(profile).takeIf { it >= 0 } ?: 0
-                syncRepository.setProfilePin(profileIndex + 1, pin, null)
-            } catch (e: Exception) {
-                AppLogger.e("ProfileVM", "Failed to sync PIN to cloud", e)
-            }
         }
     }
 
@@ -394,13 +375,8 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch {
             profileRepository.updateProfile(updatedProfile)
             _uiState.value = _uiState.value.copy(editingProfile = updatedProfile)
-            // Sync PIN removal to cloud
-            try {
-                val profileIndex = _uiState.value.profiles.indexOf(profile).takeIf { it >= 0 } ?: 0
-                syncRepository.clearProfilePin(profileIndex + 1, null)
-            } catch (e: Exception) {
-                AppLogger.e("ProfileVM", "Failed to sync PIN removal to cloud", e)
-            }
+            hidePinDialog()
+            showToast("Profile PIN removed", ToastType.SUCCESS)
         }
     }
 }

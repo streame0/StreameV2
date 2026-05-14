@@ -12,11 +12,14 @@ import com.streame.tv.util.profilesDataStore
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,9 +39,12 @@ class ProfileRepository @Inject constructor(
         private const val MIGRATION_DONE_KEY = "profiles_room_migration_done"
     }
 
+    private val migrationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     init {
-        // One-time migration: copy profiles from DataStore JSON to Room
-        runBlocking {
+        // One-time migration: copy profiles from DataStore JSON to Room.
+        // Runs on IO to avoid blocking the main thread / causing ANR.
+        migrationScope.launch {
             migrateFromDataStoreIfNeeded()
         }
     }
@@ -122,39 +128,12 @@ class ProfileRepository @Inject constructor(
         }
     }
 
-    suspend fun replaceProfilesFromCloud(
-        profiles: List<Profile>,
-        activeProfileId: String?
-    ) {
-        profileDao.deleteAll()
-        profileDao.upsertAll(profiles.map { it.toEntity() })
-        context.profilesDataStore.edit { prefs ->
-            if (!activeProfileId.isNullOrBlank() && profiles.any { it.id == activeProfileId }) {
-                prefs[ACTIVE_PROFILE_KEY] = activeProfileId
-            } else if (profiles.isNotEmpty()) {
-                prefs[ACTIVE_PROFILE_KEY] = profiles.first().id
-            } else {
-                prefs.remove(ACTIVE_PROFILE_KEY)
-            }
-        }
-    }
-
     suspend fun createDefaultProfileIfNeeded(): Profile? {
         if (hasProfiles()) return null
         return createProfile(
             name = "Profile 1",
             avatarColor = ProfileColors.colors[0]
         )
-    }
-
-    suspend fun linkCloudAccount(profileId: String, cloudUserId: String, cloudEmail: String) {
-        val entity = profileDao.getById(profileId) ?: return
-        profileDao.upsert(entity.copy(cloudUserId = cloudUserId, cloudEmail = cloudEmail))
-    }
-
-    suspend fun clearCloudLink(profileId: String) {
-        val entity = profileDao.getById(profileId) ?: return
-        profileDao.upsert(entity.copy(cloudUserId = null, cloudEmail = null))
     }
 
     /**
@@ -196,9 +175,7 @@ class ProfileRepository @Inject constructor(
         pin = pin,
         isLocked = isLocked,
         createdAt = createdAt,
-        lastUsedAt = lastUsedAt,
-        cloudUserId = cloudUserId,
-        cloudEmail = cloudEmail
+        lastUsedAt = lastUsedAt
     )
 
     private fun Profile.toEntity() = ProfileEntity(
@@ -210,8 +187,6 @@ class ProfileRepository @Inject constructor(
         pin = pin,
         isLocked = isLocked,
         createdAt = createdAt,
-        lastUsedAt = lastUsedAt,
-        cloudUserId = cloudUserId,
-        cloudEmail = cloudEmail
+        lastUsedAt = lastUsedAt
     )
 }

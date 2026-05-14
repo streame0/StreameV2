@@ -38,9 +38,7 @@ android {
         versionName = "1.3"
         buildConfigField("String", "GITHUB_OWNER", "\"streame0\"")
         buildConfigField("String", "GITHUB_REPO", "\"StreameV2\"")
-        buildConfigField("String", "SUPABASE_URL", "\"${localSecretValue("SUPABASE_URL")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localSecretValue("SUPABASE_ANON_KEY")}\"")
-        buildConfigField("String", "TV_LOGIN_WEB_BASE_URL", "\"${localSecretValue("TV_LOGIN_WEB_BASE_URL")}\"")
+
 
         // Support both 32-bit and 64-bit devices
         ndk {
@@ -309,14 +307,7 @@ dependencies {
     // and SENTRY_DSN from secrets.properties/secrets.defaults.properties.
     implementation("io.sentry:sentry-android:8.40.0")
 
-    // Supabase — cloud sync + auth
-    implementation(platform("io.github.jan-tennert.supabase:bom:3.1.4"))
-    implementation("io.github.jan-tennert.supabase:auth-kt")
-    implementation("io.github.jan-tennert.supabase:postgrest-kt")
-    implementation("io.github.jan-tennert.supabase:realtime-kt")
-    implementation("io.ktor:ktor-client-okhttp:3.1.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-    implementation("com.russhwolf:multiplatform-settings:1.3.0")
+
 
     // AndroidX Security — encrypted shared preferences for auth tokens
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
@@ -325,6 +316,7 @@ dependencies {
 
     // Unit Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("io.mockk:mockk:1.13.8")
     testImplementation("app.cash.turbine:turbine:1.0.0")  // Flow testing

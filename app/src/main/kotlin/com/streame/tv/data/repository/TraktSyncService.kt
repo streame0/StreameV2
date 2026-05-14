@@ -96,7 +96,7 @@ data class WatchedMovieRecord(
 /**
  * TraktSyncService - Manages synchronization between Trakt and local storage
  *
- * No Supabase — Trakt is the only cloud service:
+ * Trakt is the only cloud service:
  * 1. Full sync: Imports all watched data from Trakt to local cache
  * 2. Incremental sync: Uses Trakt's last_activities to sync only changes
  * 3. Two-way sync: Pushes local changes to Trakt

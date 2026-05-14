@@ -6,11 +6,11 @@ import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 
 /**
- * A DataSource.Factory that wraps DefaultHttpDataSource and appends YouTube's
+ * A DataSource.Factory that wraps a HttpDataSource and appends YouTube's
  * `&range=start-end` query parameter on each request. YouTube throttles (and
  * kills) connections that try to download full adaptive streams in one shot,
  * but honours chunked range-param requests at full speed.
@@ -19,8 +19,16 @@ import androidx.media3.datasource.TransferListener
  */
 @UnstableApi
 class YoutubeChunkedDataSourceFactory(
+    private val upstreamFactory: HttpDataSource.Factory,
     private val chunkSizeBytes: Long = CHUNK_SIZE
-) : DataSource.Factory {
+) : HttpDataSource.Factory {
+
+    private val defaultRequestProperties = HttpDataSource.RequestProperties()
+
+    override fun setDefaultRequestProperties(defaultRequestProperties: Map<String, String>): HttpDataSource.Factory {
+        upstreamFactory.setDefaultRequestProperties(defaultRequestProperties)
+        return this
+    }
 
     companion object {
         private const val TAG = "YTChunkedDS"
@@ -28,19 +36,15 @@ class YoutubeChunkedDataSourceFactory(
         private const val CHUNK_SIZE = 10L * 1024 * 1024
     }
 
-    override fun createDataSource(): DataSource {
-        val upstream = DefaultHttpDataSource.Factory()
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(15_000)
-            .setAllowCrossProtocolRedirects(true)
-            .createDataSource()
+    override fun createDataSource(): HttpDataSource {
+        val upstream = upstreamFactory.createDataSource()
         return YoutubeChunkedDataSource(upstream, chunkSizeBytes)
     }
 
     private class YoutubeChunkedDataSource(
-        private val upstream: DefaultHttpDataSource,
+        private val upstream: HttpDataSource,
         private val chunkSize: Long
-    ) : DataSource {
+    ) : HttpDataSource {
 
         private var currentUri: Uri? = null
         private var isYouTubeStream = false
@@ -50,6 +54,22 @@ class YoutubeChunkedDataSourceFactory(
         private var bytesReadInChunk = 0L
         private var originalDataSpec: DataSpec? = null
 
+        override fun setRequestProperty(name: String, value: String) {
+            upstream.setRequestProperty(name, value)
+        }
+
+        override fun clearRequestProperty(name: String) {
+            upstream.clearRequestProperty(name)
+        }
+
+        override fun clearAllRequestProperties() {
+            upstream.clearAllRequestProperties()
+        }
+
+        override fun getResponseCode(): Int = upstream.responseCode
+
+        override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
+
         override fun addTransferListener(transferListener: TransferListener) {
             upstream.addTransferListener(transferListener)
         }
@@ -57,7 +77,8 @@ class YoutubeChunkedDataSourceFactory(
         override fun open(dataSpec: DataSpec): Long {
             val uri = dataSpec.uri
             val host = uri.host.orEmpty()
-            isYouTubeStream = host.contains("googlevideo.com")
+            val path = uri.path.orEmpty()
+            isYouTubeStream = host.contains("googlevideo.com") || path.contains("googlevideo.com")
 
             if (!isYouTubeStream) {
                 return upstream.open(dataSpec)
@@ -72,11 +93,19 @@ class YoutubeChunkedDataSourceFactory(
 
         private fun openNextChunk(): Long {
             val spec = originalDataSpec ?: throw IllegalStateException("No DataSpec")
+            
+            // Calculate chunk end position
             val end = if (totalContentLength != C.LENGTH_UNSET.toLong()) {
-                minOf(currentChunkStart + chunkSize - 1, currentChunkStart + totalContentLength - 1)
+                minOf(currentChunkStart + chunkSize - 1, originalDataSpec!!.position + originalDataSpec!!.length - 1)
             } else {
                 currentChunkStart + chunkSize - 1
             }
+
+            // Ensure we don't request a range that starts beyond the content length if known
+            if (totalContentLength != C.LENGTH_UNSET.toLong() && currentChunkStart >= (originalDataSpec!!.position + originalDataSpec!!.length)) {
+                return C.LENGTH_UNSET.toLong()
+            }
+
             currentChunkEnd = end
 
             // Append &range=start-end to the URL (YouTube's own range param, not HTTP Range header)
@@ -91,7 +120,14 @@ class YoutubeChunkedDataSourceFactory(
                 .build()
 
             bytesReadInChunk = 0
-            upstream.open(chunkedSpec)
+            try {
+                upstream.open(chunkedSpec)
+            } catch (e: HttpDataSource.InvalidResponseCodeException) {
+                if (e.responseCode == 416) {
+                    Log.e(TAG, "416 Requested Range Not Satisfiable at $currentChunkStart-$currentChunkEnd", e)
+                }
+                throw e
+            }
             return if (totalContentLength != C.LENGTH_UNSET.toLong()) totalContentLength else C.LENGTH_UNSET.toLong()
         }
 

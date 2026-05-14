@@ -7,7 +7,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
+
+private const val TAG = "SubtitleTranslationMgr"
 
 class SubtitleTranslationManager(
     private var service: SubtitleTranslationService,
@@ -66,8 +69,11 @@ class SubtitleTranslationManager(
             }
 
             val texts = batch.map { it.text }
+            val cacheHits = texts.count { cache.containsKey(it) }
+            Log.d(TAG, "processBatches: batch=${texts.size} cacheHits=$cacheHits targetLanguage=$targetLanguage cacheSize=${cache.size}")
             val result = service.translateBatch(texts, targetLanguage)
             if (!result.success) {
+                Log.w(TAG, "processBatches: translation failed error=${result.errorMessage}")
                 onBatchResult?.invoke(false, result.errorMessage)
                 batch.forEachIndexed { i, item ->
                     cache[item.text] = item.text
@@ -78,6 +84,7 @@ class SubtitleTranslationManager(
                 delay(5_000L)
                 continue
             }
+            Log.d(TAG, "processBatches: success translated=${result.lines.size}")
             onBatchResult?.invoke(true, null)
             batch.forEachIndexed { i, item ->
                 val translated = result.lines.getOrElse(i) { item.text }

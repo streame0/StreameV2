@@ -140,8 +140,6 @@
     <string name="add_addon">Add Addon</string>
     <string name="add_cloudstream_repo">Add Cloudstream Repository</string>
     <string name="trakt_account">Trakt Account</string>
-    <string name="cloud_account">Cloud Account</string>
-    <string name="force_cloud_sync">Force Cloud Sync</string>
     <string name="switch_profile">Switch Profile</string>
     <string name="app_version">App Version</string>
 
@@ -190,7 +188,7 @@
     <string name="enter_pin_to_unlock">Enter PIN to unlock</string>
     <string name="set_profile_pin">Set Profile PIN</string>
     <string name="done">Done</string>
-    <string name="connect_to_cloud">Connect to Streame Cloud</string>
+
 
     <!-- AI Subtitles -->
     <string name="ai_subtitles_section">AI SUBTITLES</string>

@@ -73,12 +73,6 @@ class StreameApplication : Application(), Configuration.Provider, SingletonImage
     lateinit var watchlistRepository: WatchlistRepository
     @Inject
     lateinit var watchHistoryRepository: com.streame.tv.data.repository.WatchHistoryRepository
-    @Inject
-    lateinit var startupSyncService: com.streame.tv.data.sync.StartupSyncService
-    @Inject
-    lateinit var realtimeSyncManager: com.streame.tv.data.sync.RealtimeSyncManager
-    @Inject
-    lateinit var cloudSyncCoordinator: com.streame.tv.data.sync.CloudSyncCoordinator
 
     override fun onCreate() {
         super.onCreate()
@@ -133,9 +127,12 @@ class StreameApplication : Application(), Configuration.Provider, SingletonImage
                 // Fatal errors — the process is in an unrecoverable state.
                 // Forward to the default handler so the system can restart the app.
                 defaultHandler?.uncaughtException(thread, throwable)
+            } else {
+                // Non-fatal errors are swallowed intentionally on TV:
+                // a brief glitch is preferable to a full app restart.
+                // But always report to crash reporter for observability.
+                runCatching { SentryCrashReporter.recordException(throwable) }
             }
-            // Non-fatal errors are swallowed intentionally on TV:
-            // a brief glitch is preferable to a full app restart.
         }
 
         // OkHttpProvider.init(context) just stashes the app context; it does
@@ -179,13 +176,6 @@ class StreameApplication : Application(), Configuration.Provider, SingletonImage
             kotlinx.coroutines.coroutineScope {
                 launch { runCatching { watchlistRepository.getWatchlistItems() } }
                 launch { runCatching { watchHistoryRepository.loadFromRoom() } }
-                launch { runCatching { startupSyncService.pullAllData() } }
-                launch {
-                    runCatching {
-                        cloudSyncCoordinator.start()
-                        realtimeSyncManager.start()
-                    }
-                }
             }
         }
     }

@@ -65,13 +65,10 @@ object OkHttpProvider {
         )
         // Trakt API — carries OAuth tokens in headers
         .add("api.trakt.tv",
+            "sha256/kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",  // WE1 intermediate (Google Trust Services)
+            "sha256/mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=",  // GTS Root R4
             "sha256/FbsEWoQj9ZJ+ZZR5jneKjW8gZ3j3Iw7LZmvO3gPjL1w=",  // Let's Encrypt R4 intermediate
             "sha256/sRHdihwgkaV1N4j9kUo2Y0uU5qWYcQCw0yAJUw0b0+4="   // backup: Let's Encrypt R3 intermediate
-        )
-        // Supabase — carries JWT tokens and user data
-        .add("*.supabase.co",
-            "sha256/kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",  // WE1 intermediate (Google Trust Services)
-            "sha256/mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c="   // GTS Root R4
         )
         .build()
 

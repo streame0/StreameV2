@@ -32,8 +32,7 @@
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
         android:localeConfig="@xml/locale_config"
-        android:theme="@style/Theme.StreameTV"
-        >
+        android:theme="@style/Theme.StreameTV">
 
         <meta-data
             android:name="io.sentry.auto-init"
@@ -84,15 +83,7 @@
                 android:value="androidx.startup"
                 tools:node="remove" />
             <meta-data
-                android:name="io.github.jan.supabase.gotrue.SupabaseInitializer"
-                android:value="androidx.startup"
-                tools:node="remove" />
-            <meta-data
                 android:name="androidx.lifecycle.ProcessLifecycleInitializer"
-                android:value="androidx.startup"
-                tools:node="remove" />
-            <meta-data
-                android:name="com.russhwolf.settings.SettingsInitializer"
                 android:value="androidx.startup"
                 tools:node="remove" />
         </provider>
@@ -126,5 +117,3 @@
     </application>
 
 </manifest>
-
-

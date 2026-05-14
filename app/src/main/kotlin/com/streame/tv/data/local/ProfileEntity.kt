@@ -13,7 +13,6 @@ import androidx.room.PrimaryKey
 @Entity(
     tableName = "profiles",
     indices = [
-        Index("cloudUserId"),
         Index("lastUsedAt")
     ]
 )
@@ -26,7 +25,5 @@ data class ProfileEntity(
     val pin: String? = null,
     val isLocked: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
-    val lastUsedAt: Long = System.currentTimeMillis(),
-    val cloudUserId: String? = null,
-    val cloudEmail: String? = null
+    val lastUsedAt: Long = System.currentTimeMillis()
 )

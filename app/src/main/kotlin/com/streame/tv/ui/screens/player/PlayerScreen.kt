@@ -10,6 +10,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import com.streame.tv.BuildConfig
+import com.streame.tv.data.api.YoutubeChunkedDataSourceFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -332,7 +333,7 @@ fun PlayerScreen(
     var bufferingStartTime by remember { mutableStateOf<Long?>(null) }
     val bufferingTimeoutMs = 25_000L // Mid-playback timeout for stuck buffering
     var userSelectedSourceManually by remember { mutableStateOf(false) }
-    val allowStartupSourceFallback = true
+    val allowStartupSourceFallback = uiState.autoFailoverBadSources
     val allowMidPlaybackSourceFallback = false
     val initialBufferingTimeoutMs = remember(uiState.selectedStream, userSelectedSourceManually) {
         estimateInitialStartupTimeoutMs(
@@ -431,7 +432,7 @@ fun PlayerScreen(
                 rebufferRecoverAttempted = false
                 longRebufferCount = 0
                 isAutoAdvancing = true
-                viewModel.selectStream(streams[nextIndex])
+                viewModel.selectStream(streams[nextIndex], selectionIntent = com.streame.tv.ui.screens.player.SelectionIntent.STARTUP_FAILOVER)
                 true
             }
         }
@@ -459,9 +460,11 @@ fun PlayerScreen(
             .build()
     }
     val httpDataSourceFactory = remember(playbackHttpClient) {
-        OkHttpDataSource.Factory(playbackHttpClient)
+        val okHttpFactory = OkHttpDataSource.Factory(playbackHttpClient)
             .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .setDefaultRequestProperties(baseRequestHeaders)
+
+        YoutubeChunkedDataSourceFactory(okHttpFactory)
     }
     val mediaCache = remember(context) { PlaybackCacheSingleton.getInstance(context) }
     val cacheDataSourceFactory = remember(httpDataSourceFactory, mediaCache) {
@@ -721,6 +724,8 @@ fun PlayerScreen(
                                 append(' ')
                                 append(error.cause?.message.orEmpty())
                             }.lowercase()
+                            val is403 = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+                                    (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode == 403
                             val isTimeoutError =
                                 error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_TIMEOUT ||
                                     error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
@@ -732,6 +737,15 @@ fun PlayerScreen(
                                     "broken pipe" in timeoutMessage ||
                                     "etimedout" in timeoutMessage
 
+                            // For 403 Forbidden or heavy source timeout, try refreshing the URL once.
+                            if (!hasPlaybackStarted && (is403 || (heavy && isTimeoutError))) {
+                                if (!startupSameSourceRefreshAttempted) {
+                                    startupSameSourceRefreshAttempted = true
+                                    latestUiState.selectedStream?.let { viewModel.selectStream(it, this@apply.currentPosition, selectionIntent = com.streame.tv.ui.screens.player.SelectionIntent.SAME_SOURCE_RETRY) }
+                                    return
+                                }
+                            }
+
                             // For heavy sources, retry same source first instead of failing immediately.
                             if (!hasPlaybackStarted && heavy && isTimeoutError && startupSameSourceRetryCount < heavyStartupMaxRetries) {
                                 startupSameSourceRetryCount += 1
@@ -740,14 +754,6 @@ fun PlayerScreen(
                                 prepare()
                                 playWhenReady = wasPlaying
                                 return
-                            }
-                            if (!hasPlaybackStarted && heavy && isTimeoutError) {
-                                // One-time full re-resolve of same source to refresh debrid URL/headers.
-                                if (!startupSameSourceRefreshAttempted) {
-                                    startupSameSourceRefreshAttempted = true
-                                    latestUiState.selectedStream?.let { viewModel.selectStream(it, this@apply.currentPosition) }
-                                    return
-                                }
                             }
 
                             // Auto-advance when the startup URL is clearly dead — HTTP 4xx/5xx
@@ -1462,7 +1468,7 @@ fun PlayerScreen(
                         // auto advanced to a fallback stream
                     } else if (!startupSameSourceRefreshAttempted) {
                         startupSameSourceRefreshAttempted = true
-                        uiState.selectedStream?.let { viewModel.selectStream(it, exoPlayer.currentPosition) }
+                        uiState.selectedStream?.let { viewModel.selectStream(it, exoPlayer.currentPosition, selectionIntent = com.streame.tv.ui.screens.player.SelectionIntent.SAME_SOURCE_RETRY) }
                     } else {
                         startupHardFailureReported = true
                         playbackIssueReported = true
@@ -2184,6 +2190,7 @@ fun PlayerScreen(
             )
         }
 
+
         // Loading screen overlay - keep visible until player is fully started.
         if (uiState.isLoading || uiState.selectedStreamUrl == null || !hasPlaybackStarted) {
             Box(
@@ -2715,7 +2722,7 @@ fun PlayerScreen(
                 startupUrlLock = null
                 rebufferRecoverAttempted = false
                 longRebufferCount = 0
-                viewModel.selectStream(stream, exoPlayer.currentPosition)
+                viewModel.selectStream(stream, exoPlayer.currentPosition, selectionIntent = com.streame.tv.ui.screens.player.SelectionIntent.USER_SELECTED)
                 showSourceMenu = false
                 showControls = true
                 coroutineScope.launch {

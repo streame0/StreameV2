@@ -54,8 +54,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.streame.tv.ui.components.AppBottomBar
 import androidx.core.view.WindowCompat
@@ -94,10 +92,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.work.ExistingWorkPolicy
 import androidx.work.BackoffPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -134,6 +128,8 @@ import javax.inject.Inject
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+
+private val THEME_VARIANT_KEY = stringPreferencesKey("theme_variant")
 
 private sealed interface ActiveProfileLoadState {
     data object Loading : ActiveProfileLoadState
@@ -174,9 +170,6 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var mediaRepository: Lazy<MediaRepository>
 
-    @Inject
-    lateinit var cloudSyncCoordinator: com.streame.tv.data.sync.CloudSyncCoordinator
-
     private var jankStats: JankStats? = null
     private var pendingLauncherRequest by mutableStateOf<LauncherContinueWatchingRequest?>(null)
 
@@ -199,8 +192,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Retry any cloud sync pushes that failed while the app was backgrounded
-        cloudSyncCoordinator.retryIfDirty()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

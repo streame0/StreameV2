@@ -17,6 +17,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -101,7 +102,7 @@ fun TrailerPlayer(
             val vUrl = videoUrl ?: return@LaunchedEffect
             if (!audioUrl.isNullOrBlank()) {
                 // Adaptive: separate video + audio streams
-                val factory = DefaultMediaSourceFactory(YoutubeChunkedDataSourceFactory())
+                val factory = DefaultMediaSourceFactory(YoutubeChunkedDataSourceFactory(DefaultHttpDataSource.Factory()))
                 val videoSource = factory.createMediaSource(MediaItem.fromUri(vUrl))
                 val audioSource = factory.createMediaSource(MediaItem.fromUri(audioUrl!!))
                 player.setMediaSource(MergingMediaSource(videoSource, audioSource))

@@ -13,20 +13,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         HomeRowEntity::class,
         CatalogConfigEntity::class,
         WatchHistoryEntity::class,
-        SyncQueueEntity::class,
         WatchlistEntity::class,
         DownloadEntity::class,
         SearchHistoryEntity::class,
         ProfileEntity::class
     ],
-    version = 8,
+    version = 10,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun homeRowDao(): HomeRowDao
     abstract fun catalogConfigDao(): CatalogConfigDao
     abstract fun watchHistoryDao(): WatchHistoryDao
-    abstract fun syncQueueDao(): SyncQueueDao
     abstract fun watchlistDao(): WatchlistDao
     abstract fun downloadDao(): DownloadDao
     abstract fun searchHistoryDao(): SearchHistoryDao
@@ -173,6 +171,48 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Fill null progressKey values from existing columns before creating unique index
+                db.execSQL("""
+                    UPDATE watch_history
+                    SET progressKey = CASE
+                        WHEN mediaType = 'tv' THEN 'tv:' || tmdbId || ':' || COALESCE(season, 0) || ':' || COALESCE(episode, 0)
+                        ELSE 'movie:' || tmdbId
+                    END
+                    WHERE progressKey IS NULL
+                """.trimIndent())
+                // Dedupe: keep newest row per (profileId, progressKey), delete older duplicates
+                db.execSQL("""
+                    DELETE FROM watch_history
+                    WHERE rowId NOT IN (
+                        SELECT MIN(rowId)
+                        FROM watch_history
+                        GROUP BY profileId, progressKey
+                    )
+                """.trimIndent())
+                // Now safe to create unique composite index
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_watch_history_profileId_progressKey ON watch_history (profileId, progressKey)")
+            }
+        }
+
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS sync_queue")
+                db.execSQL("DROP INDEX IF EXISTS index_profiles_cloudUserId")
+                val cursor = db.query("SELECT name FROM pragma_table_info('profiles') WHERE name IN ('cloudUserId','cloudEmail')")
+                val hasCloudCols = cursor.count > 0
+                cursor.close()
+                if (hasCloudCols) {
+                    db.execSQL("CREATE TABLE IF NOT EXISTS profiles_new (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, avatarColor INTEGER NOT NULL, avatarId INTEGER NOT NULL DEFAULT 0, isKidsProfile INTEGER NOT NULL DEFAULT 0, pin TEXT DEFAULT NULL, isLocked INTEGER NOT NULL DEFAULT 0, createdAt INTEGER NOT NULL, lastUsedAt INTEGER NOT NULL)")
+                    db.execSQL("INSERT INTO profiles_new (id,name,avatarColor,avatarId,isKidsProfile,pin,isLocked,createdAt,lastUsedAt) SELECT id,name,avatarColor,avatarId,isKidsProfile,pin,isLocked,createdAt,lastUsedAt FROM profiles")
+                    db.execSQL("DROP TABLE profiles")
+                    db.execSQL("ALTER TABLE profiles_new RENAME TO profiles")
+                }
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_profiles_lastUsedAt ON profiles (lastUsedAt)")
+            }
+        }
+
         private val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -180,7 +220,9 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_4_5,
             MIGRATION_5_6,
             MIGRATION_6_7,
-            MIGRATION_7_8
+            MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10
         )
 
         fun getInstance(context: Context): AppDatabase {

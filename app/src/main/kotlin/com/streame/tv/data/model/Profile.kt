@@ -9,14 +9,12 @@ data class Profile(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val avatarColor: Long = ProfileColors.random(),
-    val avatarId: Int = 0, // 0 = legacy letter+color, 1-24 = Compose-drawn avatar
+    val avatarId: Int = 0,
     val isKidsProfile: Boolean = false,
-    val pin: String? = null, // 4-5 digit PIN, null if not set
+    val pin: String? = null,
     val isLocked: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
-    val lastUsedAt: Long = System.currentTimeMillis(),
-    val cloudUserId: String? = null, // linked Supabase user ID (per-profile cloud account)
-    val cloudEmail: String? = null   // linked Supabase email (for display)
+    val lastUsedAt: Long = System.currentTimeMillis()
 )
 
 /**

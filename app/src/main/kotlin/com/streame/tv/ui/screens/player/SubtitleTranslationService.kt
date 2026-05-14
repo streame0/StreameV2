@@ -36,7 +36,7 @@ class SubtitleTranslationService(
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private fun extractJsonArray(text: String): JSONArray? {
+    fun extractJsonArray(text: String): JSONArray? {
         val codeBlocks = Regex("```(?:json)?\\s*([\\s\\S]*?)```").findAll(text)
             .map { it.groupValues[1].trim() }.toList().reversed()
         val stripped = text.replace(Regex("```[^`]*```"), "").trim()
@@ -54,13 +54,17 @@ class SubtitleTranslationService(
         return null
     }
 
-    private fun buildSystemPrompt(targetLanguage: String, NL: String) =
-        "You are a professional subtitle translator. Translate the following JSON array into natural $targetLanguage.\n" +
-        "Rules:\n" +
-        "1. Return ONLY a valid JSON array.\n" +
-        "2. Keep the exact same order and element count.\n" +
-        "3. Preserve the '$NL' symbol exactly where it appears as a line break.\n" +
-        "4. Use informal, spoken $targetLanguage suitable for cinema."
+    private fun buildSystemPrompt(targetLanguage: String, NL: String, count: Int) =
+        "You are a professional subtitle translator. Your task is to translate a JSON array of exactly $count strings into natural $targetLanguage.\n" +
+        "\n" +
+        "CRITICAL RULES:\n" +
+        "1. Output MUST be a valid JSON array of strings.\n" +
+        "2. The array MUST contain exactly $count elements. Do not merge or split lines.\n" +
+        "3. Preserve the special newline marker '$NL' exactly as it is in the source.\n" +
+        "4. Maintain subtitle timing context (keep lines short and punchy).\n" +
+        "5. Do not include any explanations, notes, or markdown formatting outside the JSON array.\n" +
+        "6. If a line is just a number or symbol, keep it as is.\n" +
+        "7. Ensure the translation sounds natural for TV subtitles."
 
     suspend fun translateBatch(lines: List<String>, targetLanguage: String): TranslationResult {
         if (lines.isEmpty()) return TranslationResult(lines, true)
@@ -70,21 +74,27 @@ class SubtitleTranslationService(
             return TranslationResult(lines, false, "API key missing")
         }
 
-        return when (modelProvider()) {
+        val model = modelProvider()
+        Log.d(TAG, "translateBatch count=${lines.size} model=$model targetLanguage=$targetLanguage")
+        val result = when (model) {
             SubtitleAiModel.GROQ_LLAMA_70B -> translateGroq(lines, targetLanguage, apiKey)
             SubtitleAiModel.GEMINI_FLASH_25 -> translateGemini(lines, targetLanguage, apiKey)
         }
+        if (!result.success) {
+            Log.w(TAG, "translateBatch failed count=${lines.size} model=$model target=$targetLanguage error=${result.errorMessage}")
+        }
+        return result
     }
 
     private suspend fun translateGroq(lines: List<String>, targetLanguage: String, apiKey: String): TranslationResult {
         val NL = "\u23CE"
         val encoded = lines.map { it.replace("\n", NL) }
         val inputArray = JSONArray(encoded)
-        val systemPrompt = buildSystemPrompt(targetLanguage, NL)
+        val systemPrompt = buildSystemPrompt(targetLanguage, NL, lines.size)
 
         val body = JSONObject().apply {
             put("model", GROQ_MODEL_ID)
-            put("temperature", 0.1)
+            put("temperature", 0.0)
             put("messages", JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "system")
@@ -136,7 +146,7 @@ class SubtitleTranslationService(
         val NL = "\u23CE"
         val encoded = lines.map { it.replace("\n", NL) }
         val inputArray = JSONArray(encoded)
-        val systemPrompt = buildSystemPrompt(targetLanguage, NL)
+        val systemPrompt = buildSystemPrompt(targetLanguage, NL, lines.size)
 
         val body = JSONObject().apply {
             put("system_instruction", JSONObject().apply {
@@ -148,13 +158,13 @@ class SubtitleTranslationService(
                 put(JSONObject().apply {
                     put("parts", JSONArray().apply {
                         put(JSONObject().apply {
-                            put("text", "Translate to $targetLanguage:\n$inputArray")
+                            put("text", "Translate $inputArray to $targetLanguage. Output exactly ${lines.size} elements.")
                         })
                     })
                 })
             })
             put("generationConfig", JSONObject().apply {
-                put("temperature", 0.1)
+                put("temperature", 0.0)
                 put("responseMimeType", "application/json")
                 put("thinkingConfig", JSONObject().apply {
                     put("thinkingBudget", 0)
@@ -205,7 +215,8 @@ class SubtitleTranslationService(
 
         if (resultArray.length() != lines.size) {
             Log.w(TAG, "Line count mismatch: sent ${lines.size}, got ${resultArray.length()}")
-            return TranslationResult(lines, false, "Line count mismatch")
+            Log.d(TAG, "Response context: $rawText")
+            return TranslationResult(lines, false, "Line count mismatch (expected ${lines.size}, got ${resultArray.length()})")
         }
 
         val isRtl = RTL_LANGUAGES.contains(targetLanguage.lowercase())

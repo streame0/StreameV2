@@ -21,8 +21,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import com.streame.tv.data.sync.CloudSyncInvalidationBus
-import com.streame.tv.data.sync.CloudSyncScope
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,8 +47,6 @@ class WatchlistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val profileManager: ProfileManager,
     private val tmdbApi: TmdbApi,
-    private val authManager: com.streame.tv.data.repository.AuthManager,
-    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus,
     private val watchlistDao: WatchlistDao
 ) {
     // In-memory cache for quick lookups
@@ -139,9 +135,6 @@ class WatchlistRepository @Inject constructor(
             }
             cacheLoaded = true
         }
-
-        // Signal CloudSyncCoordinator to push (no direct push — avoids double-push)
-        invalidationBus.markDirty(CloudSyncScope.WATCHLIST, reason = "addToWatchlist")
     }
 
     /**
@@ -160,9 +153,6 @@ class WatchlistRepository @Inject constructor(
             itemsCache.removeAll { it.id == tmdbId && it.mediaType == mediaType }
             _watchlistItems.value = itemsCache.toList()
         }
-
-        // Signal CloudSyncCoordinator to push (no direct push — avoids double-push)
-        invalidationBus.markDirty(CloudSyncScope.WATCHLIST, reason = "removeFromWatchlist")
     }
 
     /**
@@ -431,102 +421,4 @@ class WatchlistRepository @Inject constructor(
                 .thenByDescending { it.addedAt }
         )
     }
-
-    /**
-     * Merge cloud library items into local watchlist.
-     * Uses updated_at conflict resolution: cloud items not present locally are added;
-     * existing items are only overwritten if the cloud version is newer (higher addedAt).
-     * After merge, the in-memory cache and StateFlow are refreshed.
-     */
-    suspend fun mergeFromCloud(cloudItems: List<com.streame.tv.data.remote.supabase.SupabaseLibraryItem>) {
-        if (cloudItems.isEmpty()) return
-        val profileId = currentProfileId()
-        val localEntities = watchlistDao.getAllForProfile(profileId)
-        val localByKey = localEntities.associateBy { "${it.mediaType}:${it.tmdbId}" }
-        val now = System.currentTimeMillis()
-        val toUpsert = mutableListOf<WatchlistEntity>()
-        var merged = 0
-
-        cloudItems.forEach { cloud ->
-            val tmdbId = cloud.contentId.toIntOrNull() ?: return@forEach
-            val mediaType = cloud.contentType // "tv" or "movie"
-            val key = "$mediaType:$tmdbId"
-            val cloudAddedAt = if (cloud.addedAt > 0) cloud.addedAt else now
-            val local = localByKey[key]
-
-            val shouldTakeCloud = when {
-                local == null -> true  // new item — always add
-                cloudAddedAt > local.addedAt -> true  // cloud is newer
-                else -> false  // local is newer or same — keep local
-            }
-
-            if (shouldTakeCloud) {
-                toUpsert.add(
-                    WatchlistEntity(
-                        profileId = profileId,
-                        mediaType = mediaType,
-                        tmdbId = tmdbId,
-                        title = cloud.name.ifBlank { local?.title ?: "" },
-                        posterPath = cloud.poster ?: local?.posterPath,
-                        backdropPath = cloud.background ?: local?.backdropPath,
-                        addedAt = cloudAddedAt,
-                        sourceOrder = local?.sourceOrder ?: Int.MAX_VALUE,
-                        updatedAt = now
-                    )
-                )
-                merged++
-            }
-        }
-        if (merged > 0) {
-            watchlistDao.upsertAll(toUpsert)
-            // Refresh in-memory cache
-            cacheMutex.withLock {
-                keyCache.clear()
-                val allEntities = watchlistDao.getAllForProfile(profileId)
-                allEntities.forEach { entity ->
-                    val type = if (entity.mediaType == "tv") MediaType.TV else MediaType.MOVIE
-                    keyCache.add(cacheKey(type, entity.tmdbId))
-                }
-                cacheLoaded = true
-                // Rebuild itemsCache from basic data
-                val enriched = allEntities.map { it.toBasicMediaItem() }
-                itemsCache.clear()
-                itemsCache.addAll(enriched)
-                _watchlistItems.value = itemsCache.toList()
-            }
-        }
-    }
-
-    /**
-     * Get all watchlist items formatted for cloud push.
-     * Called by CloudSyncCoordinator when it's time to push.
-     */
-    suspend fun getAllForPush(): List<com.streame.tv.data.remote.supabase.SupabaseLibraryItem> {
-        if (!authManager.isAuthenticated) return emptyList()
-        val profileId = resolveProfileId()
-        val profileIdStr = currentProfileId()
-        return watchlistDao.getAllForProfile(profileIdStr).map { entity ->
-            com.streame.tv.data.remote.supabase.SupabaseLibraryItem(
-                contentId = entity.tmdbId.toString(),
-                contentType = entity.mediaType,
-                name = entity.title,
-                poster = entity.posterPath,
-                posterShape = "POSTER",
-                background = entity.backdropPath,
-                description = null,
-                releaseInfo = null,
-                imdbRating = null,
-                profileId = profileId
-            )
-        }
-    }
-
-    private suspend fun resolveProfileId(): Int {
-        val activeId = profileManager.getProfileId()
-        if (activeId == "default") return 1
-        val profiles = profileManager.getProfileList()
-        val index = profiles.indexOfFirst { it.id == activeId }
-        return if (index >= 0) index + 1 else 1
-    }
-
 }

@@ -95,7 +95,6 @@ fun AppTopBar(
     profile: Profile? = null,
     profileCount: Int = 1,
     clockFormat: String = "24h",
-    cloudSyncStatus: com.streame.tv.data.sync.CloudSyncStatus = com.streame.tv.data.sync.CloudSyncStatus.NOT_SIGNED_IN,
     modifier: Modifier = Modifier
 ) {
     // Always show the profile avatar when a profile exists — it's clickable
@@ -171,20 +170,6 @@ fun AppTopBar(
                     isFocused = settingsFocused,
                     isSelected = settingsSelected
                 )
-
-                // Cloud sync status indicator (small dot)
-                if (cloudSyncStatus != com.streame.tv.data.sync.CloudSyncStatus.NOT_SIGNED_IN) {
-                    val dotColor = when (cloudSyncStatus) {
-                        com.streame.tv.data.sync.CloudSyncStatus.CONNECTED -> Color(0xFF4CAF50)
-                        com.streame.tv.data.sync.CloudSyncStatus.RECONNECTING -> Color(0xFFFFC107)
-                        else -> Color.Transparent
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .background(dotColor, CircleShape)
-                    )
-                }
 
                 Text(
                     text = currentTime,

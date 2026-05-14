@@ -64,7 +64,8 @@ data class CatalogConfigEntity(
     indices = [
         Index(value = ["profileId"]),
         Index(value = ["tmdbId", "mediaType"]),
-        Index(value = ["updatedAt"])
+        Index(value = ["updatedAt"]),
+        Index(value = ["profileId", "progressKey"], unique = true)
     ]
 )
 data class WatchHistoryEntity(

@@ -48,30 +48,38 @@ object AppLogger {
     /**
      * Verbose log - stripped in release builds.
      */
-    fun v(tag: String, message: String) {}
+    fun v(tag: String, message: String) {
+        if (com.streame.tv.BuildConfig.DEBUG) android.util.Log.v(tag, message)
+    }
 
     /**
      * Debug log - stripped in release builds.
      */
-    fun d(tag: String, message: String) {}
+    fun d(tag: String, message: String) {
+        if (com.streame.tv.BuildConfig.DEBUG) android.util.Log.d(tag, message)
+    }
 
     /**
      * Info log - stripped in release builds.
      */
-    fun i(tag: String, message: String) {}
+    fun i(tag: String, message: String) {
+        if (com.streame.tv.BuildConfig.DEBUG) android.util.Log.i(tag, message)
+    }
 
     /**
      * Warning log - kept in release for diagnostics.
      */
     fun w(tag: String, message: String, throwable: Throwable? = null) {
-        // Intentionally no-op: app logging disabled for production.
+        if (com.streame.tv.BuildConfig.DEBUG) android.util.Log.w(tag, message, throwable)
+        crashContextProvider?.log("W/$tag: $message")
     }
 
     /**
      * Error log - kept in release, also sent to crash reporter.
      */
     fun e(tag: String, message: String, throwable: Throwable? = null) {
-        // Intentionally avoid breadcrumb logging.
+        if (com.streame.tv.BuildConfig.DEBUG) android.util.Log.e(tag, message, throwable)
+        crashContextProvider?.log("E/$tag: $message")
         throwable?.let { crashContextProvider?.recordException(it) }
     }
 

@@ -82,33 +82,6 @@ interface WatchHistoryDao {
 }
 
 @Dao
-interface SyncQueueDao {
-    @Query("SELECT * FROM sync_queue ORDER BY createdAt ASC")
-    suspend fun getAll(): List<SyncQueueEntity>
-
-    @Query("SELECT * FROM sync_queue ORDER BY createdAt ASC")
-    fun getAllFlow(): kotlinx.coroutines.flow.Flow<List<SyncQueueEntity>>
-
-    @Query("SELECT * FROM sync_queue WHERE scope = :scope ORDER BY createdAt ASC")
-    suspend fun getByScope(scope: String): List<SyncQueueEntity>
-
-    @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
-    suspend fun insert(entry: SyncQueueEntity): Long
-
-    @Query("DELETE FROM sync_queue WHERE id = :id")
-    suspend fun delete(id: Long)
-
-    @Query("DELETE FROM sync_queue WHERE scope = :scope")
-    suspend fun deleteByScope(scope: String)
-
-    @Query("UPDATE sync_queue SET retryCount = :retryCount, lastError = :lastError, lastAttemptAt = :lastAttemptAt WHERE id = :id")
-    suspend fun updateRetry(id: Long, retryCount: Int, lastError: String?, lastAttemptAt: Long)
-
-    @Query("DELETE FROM sync_queue")
-    suspend fun clearAll()
-}
-
-@Dao
 interface WatchlistDao {
     @Query("SELECT * FROM watchlist WHERE profileId = :profileId ORDER BY sourceOrder ASC, addedAt DESC")
     suspend fun getAllForProfile(profileId: String): List<WatchlistEntity>
@@ -202,9 +175,6 @@ interface ProfileDao {
 
     @Query("SELECT * FROM profiles WHERE id = :id")
     suspend fun getById(id: String): ProfileEntity?
-
-    @Query("SELECT * FROM profiles WHERE cloudUserId = :cloudUserId")
-    suspend fun getByCloudUserId(cloudUserId: String): ProfileEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(profile: ProfileEntity)

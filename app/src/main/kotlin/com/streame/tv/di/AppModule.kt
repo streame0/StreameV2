@@ -8,7 +8,6 @@ import com.streame.tv.data.local.HomeRowDao
 import com.streame.tv.data.local.ProfileDao
 import com.streame.tv.data.local.SearchHistoryDao
 import com.streame.tv.data.local.WatchHistoryDao
-import com.streame.tv.data.local.SyncQueueDao
 import com.streame.tv.data.local.WatchlistDao
 import com.streame.tv.data.local.LocalHomeRepository
 import com.streame.tv.data.api.ArmApi
@@ -29,8 +28,6 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-import com.streame.tv.data.repository.SyncRepositoryImpl
-import com.streame.tv.domain.repository.SyncRepository
 import javax.inject.Named
 import javax.inject.Singleton
 
@@ -207,12 +204,6 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideSyncQueueDao(database: AppDatabase): SyncQueueDao {
-        return database.syncQueueDao()
-    }
-
-    @Provides
-    @Singleton
     fun provideWatchlistDao(database: AppDatabase): WatchlistDao {
         return database.watchlistDao()
     }
@@ -244,7 +235,4 @@ object AppModule {
         return LocalHomeRepository(homeRowDao, tmdbApi)
     }
 
-    @Provides
-    @Singleton
-    fun provideSyncRepository(impl: SyncRepositoryImpl): SyncRepository = impl
 }

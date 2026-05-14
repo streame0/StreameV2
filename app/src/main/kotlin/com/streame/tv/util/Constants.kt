@@ -4,7 +4,7 @@ package com.streame.tv.util
  * Application constants
  *
  * TMDB and Trakt API keys are sourced from secrets.properties via BuildConfig.
- * No Supabase — Trakt is the only cloud service.
+ * Trakt is the only cloud service.
  */
 object Constants {
     // API Base URLs - all calls go direct

@@ -85,7 +85,6 @@ data class HomeUiState(
     val isHeroTransitioning: Boolean = false,
     val isAuthenticated: Boolean = false,
     val clockFormat: String = "24h",
-    val cloudSyncStatus: com.streame.tv.data.sync.CloudSyncStatus = com.streame.tv.data.sync.CloudSyncStatus.NOT_SIGNED_IN,
     // Toast
     val toastMessage: String? = null,
     val toastType: ToastType = ToastType.INFO
@@ -115,7 +114,6 @@ class HomeViewModel @Inject constructor(
     private val profileManager: ProfileManager,
     private val localHomeRepository: LocalHomeRepository,
     private val networkMonitor: com.streame.tv.network.NetworkMonitor,
-    private val realtimeSyncManager: com.streame.tv.data.sync.RealtimeSyncManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val imageLoader: ImageLoader by lazy {
@@ -362,6 +360,7 @@ class HomeViewModel @Inject constructor(
     private var customCatalogsJob: Job? = null
     private var loadHomeJob: Job? = null
     private var refreshContinueWatchingJob: Job? = null
+    private var pendingContinueWatchingRefresh = false
     private var watchedBadgesJob: Job? = null
     private var loadHomeRequestId: Long = 0L
     private var activeRuntimeProfileId: String? = null
@@ -729,14 +728,6 @@ class HomeViewModel @Inject constructor(
                     clockFormat = clockFormat
                 )
             } catch (_: Exception) {}
-        }
-
-        // Observe cloud sync status for UI indicator
-        viewModelScope.launch {
-            realtimeSyncManager.syncStatusFlow
-                .collect { status ->
-                    _uiState.value = _uiState.value.copy(cloudSyncStatus = status)
-                }
         }
 
         // Restore logo URL cache from disk off the main thread. This used to run
@@ -2147,10 +2138,15 @@ class HomeViewModel @Inject constructor(
             // Trakt's progress API doesn't provide — it only gives episode-level progress.
             val localItems = runCatching { traktRepository.getLocalContinueWatching() }.getOrDefault(emptyList())
             val historyItems = loadContinueWatchingFromHistory()
-            val localByKey = (localItems + historyItems).associateBy { "${it.mediaType}:${it.id}" }
+            // Use precise keys so episode-level matches don't collide for TV shows
+            val localByKey = (localItems + historyItems).associateBy { item ->
+                if (item.mediaType == MediaType.TV) "tv:${item.id}:${item.season}:${item.episode}"
+                else "movie:${item.id}"
+            }
 
             traktItems.map { traktItem ->
-                val key = "${traktItem.mediaType}:${traktItem.id}"
+                val key = if (traktItem.mediaType == MediaType.TV) "tv:${traktItem.id}:${traktItem.season}:${traktItem.episode}"
+                    else "movie:${traktItem.id}"
                 val local = localByKey[key]
                 if (local != null && local.season == traktItem.season && local.episode == traktItem.episode) {
                     // Same episode — enrich with local resume position
@@ -2205,14 +2201,14 @@ class HomeViewModel @Inject constructor(
     }
 
     fun refreshContinueWatchingOnly(force: Boolean = false) {
-        // Don't cancel an in-progress Trakt fetch - restarting a fetch that takes
-        // 10+ seconds (424 watched shows, 41 filtered, 50 progress API calls) wastes
-        // time and causes Continue Watching to never appear. Multiple callers
-        // (ON_RESUME, isAuthenticated observer, sync completion) would keep cancelling
-        // each other's fetches. The throttle mechanism prevents redundant fetches.
+        // If a refresh is already in-flight, don't cancel it (avoids the Trakt
+        // API death-spiral). Instead, mark that a re-fresh is desired and let
+        // the in-flight one finish; a follow-up refresh runs after it completes.
         if (refreshContinueWatchingJob?.isActive == true) {
-            if (force) refreshContinueWatchingJob?.cancel() else return
+            pendingContinueWatchingRefresh = true
+            return
         }
+        pendingContinueWatchingRefresh = false
         refreshContinueWatchingJob = viewModelScope.launch {
             try {
                 val now = SystemClock.elapsedRealtime()
@@ -2295,6 +2291,11 @@ class HomeViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 // Silently fail - don't clear existing data on error
+            }
+            // If a refresh was requested while we were running, start a new one now
+            if (pendingContinueWatchingRefresh) {
+                pendingContinueWatchingRefresh = false
+                refreshContinueWatchingOnly(force = true)
             }
         }
     }

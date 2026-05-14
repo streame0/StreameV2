@@ -27,13 +27,12 @@
     public static int wtf(...);
 }
 
-# Also strip ALL our custom AppLogger methods
+# Strip verbose/debug/info AppLogger methods in release.
+# Keep w() and e() — they forward to the crash reporter (Sentry/Crashlytics).
 -assumenosideeffects class com.streame.tv.util.AppLogger {
     public static void v(...);
     public static void d(...);
     public static void i(...);
-    public static void w(...);
-    public static void e(...);
 }
 
 # Strip Kotlin debug assertions in release
@@ -66,9 +65,6 @@
 -keep,allowobfuscation,allowoptimization interface * {
     @retrofit2.http.* <methods>;
 }
-
--keepattributes Signature
--keepattributes Exceptions
 
 # OkHttp platform used only on JVM and when Conscrypt dependency is available
 -dontwarn okhttp3.internal.platform.**
@@ -172,6 +168,9 @@
 -keep class com.streame.tv.data.local.WatchHistoryEntity { *; }
 -keep class com.streame.tv.data.local.SyncQueueEntity { *; }
 -keep class com.streame.tv.data.local.WatchlistEntity { *; }
+-keep class com.streame.tv.data.local.DownloadEntity { *; }
+-keep class com.streame.tv.data.local.SearchHistoryEntity { *; }
+-keep class com.streame.tv.data.local.ProfileEntity { *; }
 
 # ============================================
 # App sealed classes and state classes

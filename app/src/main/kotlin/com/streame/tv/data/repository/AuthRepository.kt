@@ -15,7 +15,7 @@ import javax.inject.Provider
 import javax.inject.Singleton
 
 /**
- * User profile data (local only — no Supabase)
+ * User profile data (local only)
  */
 data class UserProfile(
     val id: String = "",
@@ -30,7 +30,6 @@ data class UserProfile(
 
 /**
  * Authentication state for Trakt-based identity.
- * Supabase auth is handled separately by [AuthManager].
  */
 sealed class AuthState {
     object Loading : AuthState()
@@ -47,7 +46,6 @@ sealed class AuthState {
  * Repository for Trakt-based authentication and local user profile management.
  *
  * Auth state is derived from Trakt connection status.
- * Supabase authentication is managed by [AuthManager].
  */
 @Singleton
 class AuthRepository @Inject constructor(

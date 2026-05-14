@@ -82,6 +82,7 @@ data class SettingsUiState(
     val cardLayoutMode: String = CARD_LAYOUT_MODE_LANDSCAPE,
     val frameRateMatchingMode: String = "Off",
     val autoPlayNext: Boolean = true,
+    val autoFailoverBadSources: Boolean = true,
     val autoPlaySingleSource: Boolean = true,
     val autoPlayMinQuality: String = "Any",
     val dnsProvider: String = "System DNS",
@@ -155,9 +156,6 @@ data class SettingsUiState(
     // Toast
     val toastMessage: String? = null,
     val toastType: ToastType = ToastType.INFO,
-    // Supabase
-    val isSupabaseAuthenticated: Boolean = false,
-    val supabaseEmail: String? = null,
     // AI Subtitles
     val subtitleAiEnabled: Boolean = false,
     val subtitleAiModel: String = SubtitleAiModel.GROQ_LLAMA_70B.name,
@@ -182,11 +180,7 @@ class SettingsViewModel @Inject constructor(
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
     private val appUpdateRepository: AppUpdateRepository,
     private val updatePreferences: UpdatePreferences,
-    private val apkDownloader: ApkDownloader,
-    private val authManager: com.streame.tv.data.repository.AuthManager,
-    private val profileSettingsSyncService: com.streame.tv.data.sync.ProfileSettingsSyncService,
-    private val startupSyncService: com.streame.tv.data.sync.StartupSyncService,
-    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
+    private val apkDownloader: ApkDownloader
 ) : ViewModel() {
     private fun visibleCatalogs(catalogs: List<CatalogConfig>): List<CatalogConfig> {
         return catalogs.filter { config ->
@@ -202,78 +196,6 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    init {
-        observeSupabaseAuth()
-    }
-
-    private fun observeSupabaseAuth() {
-        viewModelScope.launch {
-            authManager.authState.collect { state ->
-                val isAuthenticated = state is com.streame.tv.data.repository.SupabaseAuthState.FullAccount
-                val email = (state as? com.streame.tv.data.repository.SupabaseAuthState.FullAccount)?.email
-                _uiState.update { it.copy(isSupabaseAuthenticated = isAuthenticated, supabaseEmail = email) }
-            }
-        }
-    }
-
-    fun disconnectSupabase() {
-        viewModelScope.launch {
-            // Clear the cloud link from the current profile before signing out
-            val activeProfileId = profileManager.getProfileIdSync()
-            if (activeProfileId != "default") {
-                profileRepository.clearCloudLink(activeProfileId)
-            }
-            authManager.signOut()
-        }
-    }
-
-    fun deleteSupabaseAccount() {
-        viewModelScope.launch {
-            val result = authManager.deleteAccount()
-            if (result.isFailure) {
-                _uiState.update { it.copy(toastMessage = result.exceptionOrNull()?.message ?: "Failed to delete account", toastType = ToastType.ERROR) }
-            }
-        }
-    }
-
-    fun forceSync() {
-        viewModelScope.launch { startupSyncService.pullAllData() }
-    }
-
-    /**
-     * Push current profile settings to Supabase if authenticated.
-     * Called after any settings change — fire-and-forget.
-     */
-    private fun pushProfileSettingsToRemote() {
-        // Mark the edit time immediately so cloud pulls don't revert this change
-        profileSettingsSyncService.lastLocalEditMs = System.currentTimeMillis()
-        viewModelScope.launch {
-            if (!authManager.isAuthenticated) return@launch
-            try {
-                val prefs = context.settingsDataStore.data.first()
-                val jsonMap = prefs.asMap().mapKeys { (key, _) -> key.name }
-                val jsonStr = gson.toJson(jsonMap)
-                val jsonElement = kotlinx.serialization.json.Json.parseToJsonElement(jsonStr)
-                if (jsonElement is kotlinx.serialization.json.JsonObject) {
-                    val profileId = resolveProfileId()
-                    profileSettingsSyncService.pushToRemote(profileId = profileId, settingsJson = jsonElement)
-                }
-            } catch (_: Exception) { }
-            invalidationBus.markDirty(
-                com.streame.tv.data.sync.CloudSyncScope.PROFILE_SETTINGS,
-                reason = "settingsChanged"
-            )
-        }
-    }
-
-    private suspend fun resolveProfileId(): Int {
-        val activeId = profileManager.getProfileId()
-        if (activeId == "default") return 1
-        val profiles = profileManager.getProfileList()
-        val index = profiles.indexOfFirst { it.id == activeId }
-        return if (index >= 0) index + 1 else 1
-    }
-
     private fun contentLanguageKey() = profileManager.profileStringKey("content_language")
 
     private fun defaultSubtitleKey() = profileManager.profileStringKey("default_subtitle")
@@ -288,6 +210,7 @@ class SettingsViewModel @Inject constructor(
     private fun frameRateMatchingModeKeyFor(profileId: String) = profileManager.profileStringKeyFor(profileId, "frame_rate_matching_mode")
     private fun autoPlayNextKey() = profileManager.profileBooleanKey("auto_play_next")
     private fun autoPlayNextKeyFor(profileId: String) = profileManager.profileBooleanKeyFor(profileId, "auto_play_next")
+    private fun autoFailoverBadSourcesKey() = profileManager.profileBooleanKey("auto_failover_bad_sources")
     private fun autoPlaySingleSourceKey() = profileManager.profileBooleanKey("auto_play_single_source")
     private fun autoPlaySingleSourceKeyFor(profileId: String) = profileManager.profileBooleanKeyFor(profileId, "auto_play_single_source")
     private fun autoPlayMinQualityKey() = profileManager.profileStringKey("auto_play_min_quality")
@@ -403,6 +326,7 @@ class SettingsViewModel @Inject constructor(
             // Apply content language to MediaRepository immediately
             mediaRepository.contentLanguage = if (contentLang == "en-US") null else contentLang
             var autoPlay = prefs[autoPlayNextKey()] ?: true
+            var autoFailoverBadSources = prefs[autoFailoverBadSourcesKey()] ?: true
             var autoPlaySingleSource = prefs[autoPlaySingleSourceKey()] ?: true
             // Ensure defaults are persisted on first launch so they're never ambiguous
             if (prefs[autoPlaySingleSourceKey()] == null) {
@@ -411,6 +335,9 @@ class SettingsViewModel @Inject constructor(
             }
             if (prefs[autoPlayNextKey()] == null) {
                 context.settingsDataStore.edit { it[autoPlayNextKey()] = true }
+            }
+            if (prefs[autoFailoverBadSourcesKey()] == null) {
+                context.settingsDataStore.edit { it[autoFailoverBadSourcesKey()] = true }
             }
             val autoPlayMinQuality = normalizeAutoPlayMinQuality(prefs[autoPlayMinQualityKey()])
             val trailerAutoPlay = prefs[trailerAutoPlayKey()] ?: false
@@ -468,6 +395,7 @@ class SettingsViewModel @Inject constructor(
                 cardLayoutMode = cardLayoutMode,
                 frameRateMatchingMode = frameRateMode,
                 autoPlayNext = autoPlay,
+                autoFailoverBadSources = autoFailoverBadSources,
                 autoPlaySingleSource = autoPlaySingleSource,
                 autoPlayMinQuality = autoPlayMinQuality,
                 trailerAutoPlay = trailerAutoPlay,
@@ -671,7 +599,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[defaultSubtitleKey()] = language
                 prefs[subtitleSettingsUpdatedAtKey()] = changedAt.toString()
             }
-            pushProfileSettingsToRemote()
+            
             _uiState.value = _uiState.value.copy(
                 defaultSubtitle = language,
                 subtitleOptions = loadSubtitleOptions(language)
@@ -687,7 +615,7 @@ class SettingsViewModel @Inject constructor(
             context.settingsDataStore.edit { prefs ->
                 prefs[defaultAudioLanguageKey()] = language
             }
-            pushProfileSettingsToRemote()
+            
             _uiState.value = _uiState.value.copy(
                 defaultAudioLanguage = language,
                 audioLanguageOptions = loadAudioLanguageOptions(language)
@@ -827,7 +755,7 @@ class SettingsViewModel @Inject constructor(
             context.settingsDataStore.edit { prefs ->
                 prefs[autoPlayNextKey()] = enabled
             }
-            pushProfileSettingsToRemote()
+            
             _uiState.value = _uiState.value.copy(autoPlayNext = enabled)
 
             // Sync to cloud
@@ -841,7 +769,17 @@ class SettingsViewModel @Inject constructor(
                 prefs[autoPlaySingleSourceKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(autoPlaySingleSource = enabled)
-            pushProfileSettingsToRemote()
+            
+        }
+    }
+
+    fun setAutoFailoverBadSources(enabled: Boolean) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[autoFailoverBadSourcesKey()] = enabled
+            }
+            _uiState.value = _uiState.value.copy(autoFailoverBadSources = enabled)
+            
         }
     }
 
@@ -851,7 +789,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[secondarySubtitleKey()] = language
             }
             _uiState.value = _uiState.value.copy(secondarySubtitle = language)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -861,7 +799,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[filterSubtitlesByLanguageKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(filterSubtitlesByLanguage = enabled)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -889,6 +827,47 @@ class SettingsViewModel @Inject constructor(
                 prefs[subtitleAiAutoSelectKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(subtitleAiAutoSelect = enabled)
+        }
+    }
+
+    fun testAiSubtitleKey() {
+        viewModelScope.launch {
+            val apiKey = _uiState.value.subtitleAiApiKey
+            if (apiKey.isBlank()) {
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = "AI subtitle key is empty — enter a key first",
+                    toastType = ToastType.ERROR
+                )
+                return@launch
+            }
+            val model = runCatching { SubtitleAiModel.valueOf(_uiState.value.subtitleAiModel) }
+                .getOrDefault(SubtitleAiModel.GROQ_LLAMA_70B)
+            val service = com.streame.tv.ui.screens.player.SubtitleTranslationService(
+                apiKeyProvider = { apiKey },
+                modelProvider = { model }
+            )
+            val sampleLines = listOf("Hello, this is a test subtitle line.")
+            val result = withContext(Dispatchers.IO) {
+                service.translateBatch(sampleLines, "Spanish")
+            }
+            if (result.success) {
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = "AI subtitle connection successful! Translated: \"${result.lines.firstOrNull()}\"",
+                    toastType = ToastType.SUCCESS
+                )
+            } else {
+                val errorDisplay = when {
+                    result.errorMessage == "API key missing" -> "No API key configured"
+                    result.errorMessage == "RATE_LIMITED" -> "Rate limited — try again later"
+                    result.errorMessage?.startsWith("HTTP 401") == true -> "Invalid API key (HTTP 401)"
+                    result.errorMessage?.startsWith("HTTP 429") == true -> "Rate limited (HTTP 429)"
+                    else -> "Error: ${result.errorMessage ?: "Unknown"}"
+                }
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = "AI subtitle test failed: $errorDisplay",
+                    toastType = ToastType.ERROR
+                )
+            }
         }
     }
 
@@ -923,7 +902,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[autoPlayMinQualityKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(autoPlayMinQuality = normalized)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -939,7 +918,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[cardLayoutModeKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(cardLayoutMode = normalized)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -950,7 +929,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[contentLanguageKey()] = lang
                 prefs[LAST_APP_LANGUAGE_KEY] = lang
             }
-            pushProfileSettingsToRemote()
+            
             // Mirror to SharedPreferences so attachBaseContext can read it synchronously on next launch
             context.getSharedPreferences("app_locale", android.content.Context.MODE_PRIVATE)
                 .edit().putString("locale_tag", lang).apply()
@@ -972,7 +951,7 @@ class SettingsViewModel @Inject constructor(
                 if (mode == "auto") null else mode,
             )
             _uiState.value = _uiState.value.copy(deviceModeOverride = mode)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -983,7 +962,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[stringPreferencesKey("theme_variant")] = variant
             }
             _uiState.value = _uiState.value.copy(themeVariant = variant)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -994,7 +973,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[stringPreferencesKey("experience_mode")] = mode
             }
             _uiState.value = _uiState.value.copy(experienceMode = mode)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1005,7 +984,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[stringPreferencesKey("home_layout_mode")] = mode
             }
             _uiState.value = _uiState.value.copy(homeLayoutMode = mode)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1016,7 +995,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[stringPreferencesKey("poster_shape")] = shape
             }
             _uiState.value = _uiState.value.copy(posterShape = shape)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1026,7 +1005,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[com.streame.tv.util.SKIP_PROFILE_SELECTION_KEY] = skip
             }
             _uiState.value = _uiState.value.copy(skipProfileSelection = skip)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1043,7 +1022,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[frameRateMatchingModeKey()] = normalized
             }
             _uiState.value = _uiState.value.copy(frameRateMatchingMode = normalized)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1051,14 +1030,14 @@ class SettingsViewModel @Inject constructor(
     private fun normalizeAutoPlayMinQuality(raw: String?) = SettingsNormalizers.normalizeAutoPlayMinQuality(raw)
 
     fun setTrailerAutoPlay(enabled: Boolean) {
-        viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled); pushProfileSettingsToRemote() }
+        viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled);  }
     }
 
     fun setShowBudget(enabled: Boolean) {
         viewModelScope.launch {
             context.settingsDataStore.edit { it[showBudgetKey()] = enabled }
             _uiState.value = _uiState.value.copy(showBudget = enabled)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1066,7 +1045,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[showLoadingStatsKey()] = enabled }
             _uiState.value = _uiState.value.copy(showLoadingStats = enabled)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1075,7 +1054,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[clockFormatKey()] = next }
             _uiState.value = _uiState.value.copy(clockFormat = next)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
@@ -1091,18 +1070,18 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[volumeBoostDbKey()] = next.toString() }
             _uiState.value = _uiState.value.copy(volumeBoostDb = next)
-            pushProfileSettingsToRemote()
+            
         }
     }
 
     fun cycleSubtitleSize() {
         val next = SettingsNormalizers.nextSubtitleSize(_uiState.value.subtitleSize)
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next); pushProfileSettingsToRemote() }
+        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next);  }
     }
 
     fun cycleSubtitleColor() {
         val next = SettingsNormalizers.nextSubtitleColor(_uiState.value.subtitleColor)
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next); pushProfileSettingsToRemote() }
+        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next);  }
     }
 
     private fun normalizeDnsProviderValue(raw: String?) = SettingsNormalizers.normalizeDnsProviderValue(raw)
@@ -1144,7 +1123,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[includeSpecialsKey()] = enabled
             }
             _uiState.value = _uiState.value.copy(includeSpecials = enabled)
-            pushProfileSettingsToRemote()
+            
         }
     }
 

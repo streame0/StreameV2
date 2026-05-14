@@ -40,6 +40,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class SelectionIntent {
+    USER_SELECTED,
+    INITIAL_AUTO_PICK,
+    STARTUP_FAILOVER,
+    SAME_SOURCE_RETRY,
+    NEXT_EPISODE
+}
+
 data class PlayerUiState(
     val isLoading: Boolean = true,
     val isLoadingStreams: Boolean = false,
@@ -67,6 +75,10 @@ data class PlayerUiState(
     // "auto_play_next" DataStore setting so the player can respect the toggle
     // and so the post-episode overlay can show a Continue/Cancel prompt.
     val autoPlayNext: Boolean = true,
+    // Auto-failover to next stream source when the selected one fails to start.
+    // Separate from autoPlayNext — this controls source failover during startup,
+    // not next-episode behavior. Always enabled by default.
+    val autoFailoverBadSources: Boolean = true,
     // Volume boost in decibels. 0 = disabled, up to 15 dB. The player observes this
     // and attaches a LoudnessEnhancer to the ExoPlayer audio session. Issue #88.
     val volumeBoostDb: Int = 0,
@@ -89,7 +101,10 @@ data class PlayerUiState(
     // Language name being translated into (e.g. "Hebrew") when AI is available
     val aiTargetLanguageName: String = "",
     // Non-null while an AI translation API error toast should be visible
-    val aiErrorToast: String? = null
+    val aiErrorToast: String? = null,
+    // Human-readable AI subtitle status chip text visible in the player.
+    // Null means no status chip should be shown.
+    val aiStatusText: String? = null
 )
 
 @HiltViewModel
@@ -182,7 +197,10 @@ class PlayerViewModel @Inject constructor(
         targetLanguage = "",
         scope = viewModelScope
     ).also { mgr ->
-        mgr.onTranslatingChanged = { isTranslating -> _isTranslatingLive.value = isTranslating }
+        mgr.onTranslatingChanged = { isTranslating ->
+            _isTranslatingLive.value = isTranslating
+            updateAiStatus()
+        }
         mgr.onBatchResult = { success, errorMessage ->
             if (!success && !aiErrorToastShown) {
                 aiErrorToastShown = true
@@ -194,6 +212,7 @@ class PlayerViewModel @Inject constructor(
                 }
                 _uiState.value = _uiState.value.copy(aiErrorToast = msg)
             }
+            updateAiStatus()
         }
     }
 
@@ -204,6 +223,7 @@ class PlayerViewModel @Inject constructor(
     private fun secondarySubtitleKey() = subtitleHelper.secondarySubtitleKey()
     private fun frameRateMatchingModeKey() = profileManager.profileStringKey("frame_rate_matching_mode")
     private fun autoPlayNextKey() = profileManager.profileBooleanKey("auto_play_next")
+    private fun autoFailoverBadSourcesKey() = profileManager.profileBooleanKey("auto_failover_bad_sources")
     private fun showLoadingStatsKey() = profileManager.profileBooleanKey("show_loading_stats")
     private val knownLanguageCodes = setOf(
         "en", "es", "fr", "de", "it", "pt", "nl", "ru", "zh", "ja", "ko",
@@ -266,6 +286,7 @@ class PlayerViewModel @Inject constructor(
             val subSize = prefs[profileManager.profileStringKey("subtitle_size")] ?: "Medium"
             val subColor = prefs[profileManager.profileStringKey("subtitle_color")] ?: "White"
             val autoPlayNext = prefs[autoPlayNextKey()] ?: true
+            val autoFailoverBadSources = prefs[autoFailoverBadSourcesKey()] ?: true
             val showLoadingStats = prefs[showLoadingStatsKey()] ?: true
             val volumeBoostDb = prefs[profileManager.profileStringKey("volume_boost_db")]
                 ?.toIntOrNull()?.coerceIn(0, 15) ?: 0
@@ -283,6 +304,7 @@ class PlayerViewModel @Inject constructor(
             }.getOrDefault(SubtitleAiModel.GROQ_LLAMA_70B)
             aiRemoveHearingImpaired = prefs[aiRemoveHearingImpairedKey] ?: true
             translationManager.updateService(aiApiKey, aiModel)
+            translationManager.reset()
             _uiState.value = PlayerUiState(
                 isLoading = true,
                 isLoadingStreams = true,
@@ -293,6 +315,7 @@ class PlayerViewModel @Inject constructor(
                 subtitleSize = subSize,
                 subtitleColor = subColor,
                 autoPlayNext = autoPlayNext,
+                autoFailoverBadSources = autoFailoverBadSources,
                 showLoadingStats = showLoadingStats,
                 volumeBoostDb = volumeBoostDb
             )
@@ -590,12 +613,14 @@ class PlayerViewModel @Inject constructor(
 
                     if (shouldSelectNow) {
                         autoplaySelected = true
+                        Log.i(TAG, "Autoplay triggered elapsedMs=${elapsedMs}ms cacheHit=$cacheHit isFinal=${progressive.isFinal} hasCached=$hasCachedReadyStream streams=${mergedStreams.size}")
                         autoplaySelectBest(mergedStreams, preferredLanguage)
                     }
                 }
 
                 if (!autoplaySelected && !userManuallySelectedStream && lastMergedStreams.isNotEmpty()) {
                     autoplaySelected = true
+                    Log.i(TAG, "Autoplay fallback (post-collect) streams=${lastMergedStreams.size}")
                     autoplaySelectBest(lastMergedStreams, preferredLanguage)
                 }
 
@@ -838,14 +863,15 @@ class PlayerViewModel @Inject constructor(
             bestMatch(normalizedFallback, embeddedOnly) else null
         val embeddedMatch = embeddedPrefMatch ?: embeddedFallbackMatch
 
-        if (embeddedMatch != null) {
-            val isFallback = embeddedPrefMatch == null
-            if (!isFallback) {
-                translationManager.isEnabled = false
-                aiSourceSubtitle = null
-                _uiState.value = _uiState.value.copy(selectedSubtitle = embeddedMatch, isAiTranslating = false, isAiAvailable = false, aiTargetLanguageName = "")
-            }
-        } else if (aiModeActive) {
+            if (embeddedMatch != null) {
+                val isFallback = embeddedPrefMatch == null
+                if (!isFallback) {
+                    translationManager.isEnabled = false
+                    aiSourceSubtitle = null
+                    _uiState.value = _uiState.value.copy(selectedSubtitle = embeddedMatch, isAiTranslating = false, isAiAvailable = false, aiTargetLanguageName = "")
+                    updateAiStatus()
+                }
+            } else if (aiModeActive) {
             val source = findAiSourceSubtitle(subtitles)
             if (source != null) {
                 val targetLangName = languageCodeToName(normalizedPref)
@@ -865,11 +891,12 @@ class PlayerViewModel @Inject constructor(
         } else {
             if (aiEnabledForLanguage) {
                 val source = findAiSourceSubtitle(subtitles)
-                if (source != null) {
-                    aiSourceSubtitle = source
+            if (source != null) {
                     val targetLangName = languageCodeToName(normalizedPref)
+                    aiSourceSubtitle = source
                     translationManager.targetLanguage = targetLangName
                     _uiState.value = _uiState.value.copy(isAiAvailable = true, aiTargetLanguageName = targetLangName)
+                    updateAiStatus()
                 }
             }
             val externalMatch = bestMatch(normalizedPref)
@@ -877,6 +904,7 @@ class PlayerViewModel @Inject constructor(
             if (externalMatch != null) {
                 if (aiEnabledForLanguage) {
                     _uiState.value = _uiState.value.copy(selectedSubtitle = externalMatch, isAiTranslating = false)
+                    updateAiStatus()
                 } else {
                     aiSourceSubtitle = null
                     _uiState.value = _uiState.value.copy(selectedSubtitle = externalMatch, isAiTranslating = false, isAiAvailable = false, aiTargetLanguageName = "")
@@ -890,6 +918,20 @@ class PlayerViewModel @Inject constructor(
             ?: subtitles.firstOrNull { it.isEmbedded && it.lang.isNotBlank() }
             ?: subtitles.firstOrNull { it.isEmbedded }
             ?: subtitles.firstOrNull()
+    }
+
+    private fun updateAiStatus() {
+        val state = _uiState.value
+        val text = when {
+            state.aiErrorToast != null -> "AI subtitle error"
+            translationManager.isEnabled && translationManager.isTranslating -> "Translating\u2026"
+            translationManager.isEnabled && !translationManager.isTranslating -> "AI subtitles active"
+            aiSubtitleEnabled && aiSourceSubtitle != null -> "AI subtitles ready"
+            aiSubtitleEnabled && aiSourceSubtitle == null && state.subtitles.isNotEmpty() -> "AI unavailable: no source subtitle"
+            aiSubtitleEnabled && aiSourceSubtitle == null -> "AI unavailable: no subtitles"
+            else -> null
+        }
+        _uiState.value = state.copy(aiStatusText = text)
     }
 
     private fun languageCodeToName(code: String): String {
@@ -1110,7 +1152,8 @@ class PlayerViewModel @Inject constructor(
 
         val stabilitySelected = pickPreferredStream(playable, preferredLanguage)
         val selected = preferredFromBingeGroup ?: preferredFromNavigation ?: stabilitySelected ?: playable.first()
-        selectStream(selected)
+        Log.i(TAG, "autoplaySelectBest selected source=${selected.source} addonId=${selected.addonId} quality=${selected.quality} urlHash=${selected.url?.hashCode()}")
+        selectStream(selected, selectionIntent = SelectionIntent.INITIAL_AUTO_PICK)
     }
 
     private fun pickPreferredStream(
@@ -1253,12 +1296,15 @@ class PlayerViewModel @Inject constructor(
         val resolved: StreamSource
     )
 
+    private var lastSelectionIntent: SelectionIntent = SelectionIntent.INITIAL_AUTO_PICK
+
     /**
      * Select a stream for playback
      */
-    fun selectStream(stream: StreamSource, resumePositionMs: Long? = null) {
-        // Prevent autoplay from overriding this manual selection
-        userManuallySelectedStream = true
+    fun selectStream(stream: StreamSource, resumePositionMs: Long? = null, selectionIntent: SelectionIntent = SelectionIntent.USER_SELECTED) {
+        lastSelectionIntent = selectionIntent
+        userManuallySelectedStream = selectionIntent == SelectionIntent.USER_SELECTED
+        Log.i(TAG, "selectStream intent=$selectionIntent source=${stream.source} addonId=${stream.addonId} urlHash=${stream.url?.hashCode()} resumeMs=$resumePositionMs")
         // Cancel any previous stream resolution to prevent stale results
         selectStreamJob?.cancel()
         val requestId = ++selectStreamRequestId
@@ -1448,6 +1494,7 @@ class PlayerViewModel @Inject constructor(
             isAiTranslating = false,
             subtitleSelectionNonce = _uiState.value.subtitleSelectionNonce + 1
         )
+        updateAiStatus()
         recordSubtitleUsage(subtitle)
     }
 
@@ -1465,6 +1512,7 @@ class PlayerViewModel @Inject constructor(
             isAiAvailable = true,
             aiErrorToast = null
         )
+        updateAiStatus()
     }
 
     fun disableSubtitles() {
@@ -1478,6 +1526,7 @@ class PlayerViewModel @Inject constructor(
             aiTargetLanguageName = "",
             subtitleSelectionNonce = _uiState.value.subtitleSelectionNonce + 1
         )
+        updateAiStatus()
     }
 
     fun dismissAiErrorToast() {
@@ -1715,9 +1764,7 @@ class PlayerViewModel @Inject constructor(
                     )
                 }
 
-                if (!isPlaying || playbackState == Player.STATE_ENDED || progressPercent >= Constants.WATCHED_THRESHOLD) {
-                    runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
-                }
+                runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
             }
 
             // Mark as watched when playback ends or crosses threshold

@@ -82,10 +82,7 @@ class StreamRepository @Inject constructor(
     private val cloudstreamRepositoryService: CloudstreamRepositoryService,
     private val cloudstreamPluginInstaller: CloudstreamPluginInstaller,
     private val cloudstreamProviderRuntime: CloudstreamProviderRuntime,
-    private val httpLocalScraperRuntime: HttpLocalScraperRuntime,
-    private val addonSyncService: com.streame.tv.data.sync.AddonSyncService,
-    private val authManager: com.streame.tv.data.repository.AuthManager,
-    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
+    private val httpLocalScraperRuntime: HttpLocalScraperRuntime
 ) {
     companion object {
         const val SUPPORTED_CLOUDSTREAM_API_VERSION = 2
@@ -494,8 +491,6 @@ class StreamRepository @Inject constructor(
             addons.add(newAddon)
             saveAddons(addons)
 
-            pushAddonsToRemote()
-
             Result.success(newAddon)
         } catch (e: Exception) {
             Result.failure(e)
@@ -790,8 +785,6 @@ class StreamRepository @Inject constructor(
         }
         val addons = current.filter { it.id != addonId }
         saveAddons(addons)
-
-        pushAddonsToRemote()
     }
 
     suspend fun removeCloudstreamRepository(repoUrl: String) {
@@ -883,7 +876,6 @@ class StreamRepository @Inject constructor(
             prefs.remove(pendingAddonsKey())
         }
         synchronized(streamResultCache) { streamResultCache.clear() }
-        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.ADDONS, reason = "saveAddons")
     }
 
     private fun sanitizeAddonDisplayName(addon: Addon): Addon {
@@ -1382,16 +1374,17 @@ class StreamRepository @Inject constructor(
         return normalized.any { it in aliases }
     }
 
-    // Stream source requests — generous timeouts to accommodate slow wifi and
-    // debrid-backed addons (Torrentio, MediaFusion, etc.) that resolve remotely.
-    private val ADDON_TIMEOUT_MS = 6_000L
+    // Stream source requests — increased timeouts to accommodate slower community
+    // addons and debrid-backed resolution which can be latent on some networks.
+    private val ADDON_TIMEOUT_MS = 10_000L
     // Subtitles should not block playback but need enough time on slow connections.
-    private val SUBTITLE_TIMEOUT_MS = 6_000L
+    private val SUBTITLE_TIMEOUT_MS = 10_000L
     // VOD lookup timeout for addon fallback
-    private val VOD_LOOKUP_TIMEOUT_MS = 6_000L
+    private val VOD_LOOKUP_TIMEOUT_MS = 10_000L
     // If addons already returned streams, keep VOD lookup shorter to avoid UI delay.
     private val VOD_APPEND_TIMEOUT_MS = 3_000L
     private val STREAM_RESULT_CACHE_TTL_MS = 10 * 60_000L
+    private val STREAM_EMPTY_RESULT_CACHE_TTL_MS = 30_000L // Short TTL for empty results to allow retry
     private val STREAM_RESULT_CACHE_HTTP_TTL_MS = 90_000L
     private val STREAM_RESULT_CACHE_HTTP_EPHEMERAL_TTL_MS = 30_000L
     private val EPISODE_STREAM_CACHE_TYPE = "series_v2"
@@ -1408,7 +1401,7 @@ class StreamRepository @Inject constructor(
 
     private fun cacheTtlMsFor(result: StreamResult): Long {
         val streams = result.streams
-        if (streams.isEmpty()) return STREAM_RESULT_CACHE_TTL_MS
+        if (streams.isEmpty()) return STREAM_EMPTY_RESULT_CACHE_TTL_MS
 
         val hasHttp = streams.any { stream ->
             val url = stream.url?.trim().orEmpty()
@@ -1856,13 +1849,7 @@ class StreamRepository @Inject constructor(
                     mutex.withLock {
                         aggregatedStreams.addAll(addonStreams)
                         completed += 1
-                        val deduped = aggregatedStreams
-                            .filter { stream ->
-                                val u = stream.url?.trim().orEmpty()
-                                u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
-                            }
-                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }
-                        val filtered = applyQualityRegexFilters(deduped)
+                        val filtered = filterProgressiveStreamsForDisplay(aggregatedStreams)
                         if (completed == totalAddons) {
                             val finalResult = StreamResult(filtered, emptyList())
                             synchronized(streamResultCache) {
@@ -1897,13 +1884,7 @@ class StreamRepository @Inject constructor(
                     mutex.withLock {
                         aggregatedStreams.addAll(addonStreams)
                         completed += 1
-                        val deduped = aggregatedStreams
-                            .filter { stream ->
-                                val u = stream.url?.trim().orEmpty()
-                                u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
-                            }
-                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }
-                        val filtered = applyQualityRegexFilters(deduped)
+                        val filtered = filterProgressiveStreamsForDisplay(aggregatedStreams)
                         if (completed == totalAddons) {
                             val finalResult = StreamResult(filtered, emptyList())
                             synchronized(streamResultCache) {
@@ -2043,6 +2024,28 @@ class StreamRepository @Inject constructor(
                     sources = stream.sources ?: emptyList()
                 )
             }
+    }
+
+    private suspend fun filterProgressiveStreamsForDisplay(
+        streams: List<StreamSource>
+    ): List<StreamSource> {
+        return applyQualityRegexFilters(
+            streams.distinctBy(::progressiveStreamDedupKey)
+        )
+    }
+
+    private fun progressiveStreamDedupKey(stream: StreamSource): String {
+        val url = stream.url?.trim().orEmpty()
+        if (url.isNotBlank()) {
+            return "url:${url.substringBefore('|').substringBefore('#')}|${stream.source}"
+        }
+
+        val infoHash = stream.infoHash?.trim()?.lowercase(Locale.US).orEmpty()
+        if (infoHash.isNotBlank()) {
+            return "ih:${stream.addonId}|$infoHash|${stream.fileIdx ?: -1}|${stream.source}"
+        }
+
+        return "meta:${stream.addonId}|${stream.source}|${stream.quality}|${stream.size}"
     }
 
     private fun isSupportedPlaybackCandidate(stream: StremioStream): Boolean {
@@ -2229,13 +2232,7 @@ class StreamRepository @Inject constructor(
                     mutex.withLock {
                         aggregatedStreams.addAll(addonStreams)
                         completed += 1
-                        val deduped = aggregatedStreams
-                            .filter { stream ->
-                                val u = stream.url?.trim().orEmpty()
-                                u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
-                            }
-                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }
-                        val filtered = applyQualityRegexFilters(deduped)
+                        val filtered = filterProgressiveStreamsForDisplay(aggregatedStreams)
                         if (completed == totalAddons) {
                             val finalResult = StreamResult(filtered, emptyList())
                             synchronized(streamResultCache) {
@@ -2273,13 +2270,7 @@ class StreamRepository @Inject constructor(
                     mutex.withLock {
                         aggregatedStreams.addAll(addonStreams)
                         completed += 1
-                        val deduped = aggregatedStreams
-                            .filter { stream ->
-                                val u = stream.url?.trim().orEmpty()
-                                u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
-                            }
-                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }
-                        val filtered = applyQualityRegexFilters(deduped)
+                        val filtered = filterProgressiveStreamsForDisplay(aggregatedStreams)
                         if (completed == totalAddons) {
                             val finalResult = StreamResult(filtered, emptyList())
                             synchronized(streamResultCache) {
@@ -3251,21 +3242,6 @@ class StreamRepository @Inject constructor(
         }
     }
 
-    /**
-     * Push current addon URLs to Supabase if authenticated.
-     * Fire-and-forget — failures are logged but don't block the user.
-     */
-    private suspend fun pushAddonsToRemote() {
-        if (!authManager.isAuthenticated) return
-        try {
-            val urls = installedAddons.first()
-                .filter { it.runtimeKind == RuntimeKind.STREMIO }
-                .mapNotNull { it.url }
-            addonSyncService.pushToRemote(urls)
-        } catch (e: Exception) {
-            AppLogger.e("StreamRepo", "Failed to push addons to remote", e)
-        }
-    }
 }
 
 /**

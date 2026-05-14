@@ -950,7 +950,6 @@ fun HomeScreen(
             currentProfile = currentProfile,
             profileCount = profileCount,
             clockFormat = uiState.clockFormat,
-            cloudSyncStatus = uiState.cloudSyncStatus,
             onItemFocusedPrefetch = {},
             onNavigateToDetails = onNavigateToDetails,
             onNavigateToCollection = onNavigateToCollection,
@@ -2025,7 +2024,6 @@ private fun HomeInputLayer(
     currentProfile: com.streame.tv.data.model.Profile?,
     profileCount: Int = 1,
     clockFormat: String = "24h",
-    cloudSyncStatus: com.streame.tv.data.sync.CloudSyncStatus = com.streame.tv.data.sync.CloudSyncStatus.NOT_SIGNED_IN,
     onItemFocusedPrefetch: (MediaItem) -> Unit = {},
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit,
     onNavigateToCollection: (String) -> Unit,
@@ -2348,7 +2346,6 @@ private fun HomeInputLayer(
                 profile = currentProfile,
                 profileCount = profileCount,
                 clockFormat = clockFormat,
-                cloudSyncStatus = cloudSyncStatus
             )
         }
 

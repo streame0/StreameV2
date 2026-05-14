@@ -52,7 +52,7 @@ import javax.inject.Singleton
  * Repository for Trakt.tv API interactions
  *
  * All Trakt API calls go direct. Watched state is managed locally
- * and synced with Trakt. No Supabase.
+ * and synced with Trakt.
  */
 @Singleton
 class TraktRepository @Inject constructor(
@@ -61,7 +61,7 @@ class TraktRepository @Inject constructor(
     private val tmdbApi: TmdbApi,
     private val syncServiceProvider: Provider<TraktSyncService>,
     private val profileManager: ProfileManager,
-    private val invalidationBus: com.streame.tv.data.sync.CloudSyncInvalidationBus
+
 ) {
     private val gson = Gson()
     private val watchlistHttpClient by lazy { OkHttpClient() }
@@ -300,7 +300,7 @@ class TraktRepository @Inject constructor(
             val key = profileManager.profileStringKeyFor(profileId, "local_continue_watching_v1")
             val json = prefs[key]?.trim().orEmpty()
             if (json.isBlank()) return@forEach
-            val items = decodeContinueWatchingList(json)
+            val items = gson.fromJson(json, object : com.google.gson.reflect.TypeToken<List<ContinueWatchingItem>>() {}.type) ?: emptyList<ContinueWatchingItem>()
             if (items.isNotEmpty()) {
                 out[profileId] = items
             }
@@ -328,7 +328,7 @@ class TraktRepository @Inject constructor(
             val key = profileManager.profileStringKeyFor(profileId, "local_watched_movies_v1")
             val json = prefs[key]?.trim().orEmpty()
             if (json.isBlank()) return@forEach
-            val ids = decodeIntList(json)
+            val ids = gson.fromJson(json, object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type) ?: emptyList<Int>()
             if (ids.isNotEmpty()) {
                 out[profileId] = ids
             }
@@ -356,7 +356,7 @@ class TraktRepository @Inject constructor(
             val key = profileManager.profileStringKeyFor(profileId, "local_watched_episodes_v1")
             val json = prefs[key]?.trim().orEmpty()
             if (json.isBlank()) return@forEach
-            val keys = decodeStringList(json)
+            val keys = gson.fromJson(json, object : com.google.gson.reflect.TypeToken<List<String>>() {}.type) ?: emptyList<String>()
             if (keys.isNotEmpty()) {
                 out[profileId] = keys
             }
@@ -429,7 +429,6 @@ class TraktRepository @Inject constructor(
         updateWatchedCache(tmdbId, null, null, true)
         persistLocalWatchedSnapshotForCurrentProfile()
         removeFromContinueWatchingCache(tmdbId, null, null)
-        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markMovieWatched")
 
         // Then sync to backend in background
         try {
@@ -447,7 +446,6 @@ class TraktRepository @Inject constructor(
         // OPTIMISTIC UPDATE: Update cache immediately so the UI responds instantly
         updateWatchedCache(tmdbId, null, null, false)
         persistLocalWatchedSnapshotForCurrentProfile()
-        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markMovieUnwatched")
 
         // Then sync to backend in background
         try {
@@ -467,7 +465,6 @@ class TraktRepository @Inject constructor(
         updateShowWatchedCache(showTmdbId, season, episode, true)
         persistLocalWatchedSnapshotForCurrentProfile()
         removeFromContinueWatchingCache(showTmdbId, season, episode)
-        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markEpisodeWatched")
 
         // Then sync to backend in background (don't block UI on network)
         try {
@@ -487,7 +484,6 @@ class TraktRepository @Inject constructor(
         updateWatchedCache(showTmdbId, season, episode, false)
         updateShowWatchedCache(showTmdbId, season, episode, false)
         persistLocalWatchedSnapshotForCurrentProfile()
-        invalidationBus.markDirty(com.streame.tv.data.sync.CloudSyncScope.WATCHED_ITEMS, reason = "markEpisodeUnwatched")
 
         // Then sync to backend in background
         try {
@@ -1720,86 +1716,9 @@ class TraktRepository @Inject constructor(
 
     private suspend fun loadLocalWatchedSnapshotForCurrentProfile(): Pair<Set<Int>, Set<String>> {
         val prefs = context.traktDataStore.data.first()
-        val movies = decodeIntList(prefs[localWatchedMoviesKey()].orEmpty()).toSet()
-        val episodes = decodeStringList(prefs[localWatchedEpisodesKey()].orEmpty()).toSet()
+        val movies = (gson.fromJson(prefs[localWatchedMoviesKey()].orEmpty(), object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type) as? List<Int>)?.toSet() ?: emptySet()
+        val episodes = (gson.fromJson(prefs[localWatchedEpisodesKey()].orEmpty(), object : com.google.gson.reflect.TypeToken<List<String>>() {}.type) as? List<String>)?.toSet() ?: emptySet()
         return movies to episodes
-    }
-
-    /**
-     * Merge cloud watched items into local watched cache.
-     * Adds items not already tracked locally, then persists and refreshes the in-memory cache.
-     */
-    suspend fun mergeWatchedFromCloud(cloudItems: List<com.streame.tv.data.remote.supabase.SupabaseWatchedItem>) {
-        if (cloudItems.isEmpty()) return
-        ensureProfileCacheScope()
-        val (localMovies, localEpisodes) = loadLocalWatchedSnapshotForCurrentProfile()
-        val mergedMovies = localMovies.toMutableSet()
-        val mergedEpisodes = localEpisodes.toMutableSet()
-        var added = 0
-        cloudItems.forEach { cloud ->
-            val tmdbId = cloud.contentId.toIntOrNull() ?: return@forEach
-            if (cloud.contentType == "movie") {
-                if (!mergedMovies.contains(tmdbId)) {
-                    mergedMovies.add(tmdbId)
-                    watchedMoviesCache.add(tmdbId)
-                    added++
-                }
-            } else {
-                // TV episode: key format "show_tmdb:<showId>:<season>:<episode>"
-                val key = if (cloud.season != null && cloud.episode != null)
-                    "show_tmdb:$tmdbId:${cloud.season}:${cloud.episode}" else return@forEach
-                if (!mergedEpisodes.contains(key)) {
-                    mergedEpisodes.add(key)
-                    watchedEpisodesCache.add(key)
-                    added++
-                }
-            }
-        }
-        if (added > 0) {
-            // Persist to DataStore
-            val movieIds = mergedMovies.toList().sorted()
-            val episodeKeys = mergedEpisodes.toList().distinct().sorted()
-            context.traktDataStore.edit { prefs ->
-                prefs[localWatchedMoviesKey()] = gson.toJson(movieIds)
-                prefs[localWatchedEpisodesKey()] = gson.toJson(episodeKeys)
-            }
-        }
-    }
-
-    private fun decodeContinueWatchingList(json: String): List<ContinueWatchingItem> {
-        if (json.isBlank()) return emptyList()
-        return try {
-            val type = TypeToken.getParameterized(MutableList::class.java, ContinueWatchingItem::class.java).type
-            val items: List<ContinueWatchingItem> = gson.fromJson(json, type)
-            items.distinctBy { "${it.mediaType}:${it.id}" }
-        } catch (e: Exception) {
-            AppLogger.e("TraktRepo", "Failed to decode continue watching list", e)
-            emptyList()
-        }
-    }
-
-    private fun decodeIntList(json: String): List<Int> {
-        if (json.isBlank()) return emptyList()
-        return try {
-            val type = TypeToken.getParameterized(MutableList::class.java, Int::class.javaObjectType).type
-            val items: List<Int> = gson.fromJson(json, type)
-            items.distinct()
-        } catch (e: Exception) {
-            AppLogger.e("TraktRepo", "Failed to decode int list", e)
-            emptyList()
-        }
-    }
-
-    private fun decodeStringList(json: String): List<String> {
-        if (json.isBlank()) return emptyList()
-        return try {
-            val type = TypeToken.getParameterized(MutableList::class.java, String::class.java).type
-            val items: List<String> = gson.fromJson(json, type)
-            items.filter { it.isNotBlank() }.distinct()
-        } catch (e: Exception) {
-            AppLogger.e("TraktRepo", "Failed to decode string list", e)
-            emptyList()
-        }
     }
 
     /**
@@ -1812,7 +1731,7 @@ class TraktRepository @Inject constructor(
         if (json == null) {
             return emptyList()
         }
-        return decodeContinueWatchingList(json)
+        return gson.fromJson(json, object : com.google.gson.reflect.TypeToken<List<ContinueWatchingItem>>() {}.type) ?: emptyList()
     }
 
     /**
