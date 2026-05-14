@@ -429,7 +429,9 @@ fun AppNavigation(
                 )
             } else {
                 // Params lost (process death) — go back to home
-                navController.popBackStack()
+                LaunchedEffect(playbackId) {
+                    navigateHome()
+                }
             }
         }
     }
