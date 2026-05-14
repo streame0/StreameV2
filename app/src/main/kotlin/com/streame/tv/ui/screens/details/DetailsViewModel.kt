@@ -1100,7 +1100,7 @@ class DetailsViewModel @Inject constructor(
                 playSeason = playTarget?.season ?: latestState.playSeason,
                 playEpisode = playTarget?.episode ?: latestState.playEpisode,
                 playLabel = playTarget?.label ?: latestState.playLabel,
-                playPositionMs = playTarget?.positionMs ?: 0L,
+                playPositionMs = playTarget?.positionMs ?: latestState.playPositionMs,
                 lastAddonId = playTarget?.lastAddonId ?: latestState.lastAddonId,
                 lastSourceName = playTarget?.lastSourceName ?: latestState.lastSourceName,
                 lastBingeGroup = playTarget?.lastBingeGroup ?: latestState.lastBingeGroup

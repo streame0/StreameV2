@@ -364,8 +364,10 @@ class AccountViewModel @Inject constructor(
 
     fun loadAvatarCatalog() {
         viewModelScope.launch {
-            val catalog = avatarRepository.getAvatarCatalog()
-            _uiState.update { it.copy(avatarCatalog = catalog) }
+            runCatching {
+                val catalog = avatarRepository.getAvatarCatalog()
+                _uiState.update { it.copy(avatarCatalog = catalog) }
+            }
         }
     }
 

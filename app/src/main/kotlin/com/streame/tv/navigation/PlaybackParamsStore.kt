@@ -43,20 +43,21 @@ object PlaybackParamsStore {
     }
 
     /**
-     * Retrieve and remove params for the given playbackId.
+     * Retrieve params for the given playbackId.
+     * Does NOT remove the entry — cleanup happens via [removeOnDispose].
      * Returns null if the ID doesn't exist (e.g. process death).
      */
     @Synchronized
-    fun consume(id: String): PlaybackParams? {
-        return store.remove(id)
+    fun get(id: String): PlaybackParams? {
+        return store[id]
     }
 
     /**
-     * Peek at params without removing (used for process-death recovery).
+     * Remove a specific playbackId entry (called when destination is disposed).
      */
     @Synchronized
-    fun peek(id: String): PlaybackParams? {
-        return store[id]
+    fun removeOnDispose(id: String) {
+        store.remove(id)
     }
 
     /**

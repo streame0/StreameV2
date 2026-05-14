@@ -59,11 +59,13 @@ class DownloadWorker @AssistedInject constructor(
             downloadRepository.updateProgress(downloadId, "downloading", 0)
 
             val url = URL(entity.sourceUrl)
-            val connection = url.openConnection() as HttpURLConnection
+            val connection = url.openConnection()
+            if (connection !is HttpURLConnection) {
+                throw Exception("Non-HTTP URL not supported: ${entity.sourceUrl}")
+            }
             connection.connectTimeout = 30_000
             connection.readTimeout = 60_000
             connection.requestMethod = "GET"
-            // Follow redirects
             connection.instanceFollowRedirects = true
 
             val responseCode = connection.responseCode

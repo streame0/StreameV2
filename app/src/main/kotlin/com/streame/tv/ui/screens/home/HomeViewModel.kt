@@ -118,7 +118,7 @@ class HomeViewModel @Inject constructor(
     private val realtimeSyncManager: com.streame.tv.data.sync.RealtimeSyncManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
-    private val imageLoader: ImageLoader by lazy(LazyThreadSafetyMode.NONE) {
+    private val imageLoader: ImageLoader by lazy {
         context.imageLoader
     }
 
@@ -873,15 +873,6 @@ class HomeViewModel @Inject constructor(
             }
         }
         scheduleInitialHomeLoad()
-        // Defer heavy background warmups so first-launch navigation remains smooth.
-        viewModelScope.launch {
-            delay(if (isLowRamDevice) 10 * 60_000L else 8 * 60_000L)
-            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                try {
-                } catch (e: Exception) {
-                }
-            }
-        }
         viewModelScope.launch {
             try {
                 // Start CW fetch as soon as Trakt auth is available. This no longer

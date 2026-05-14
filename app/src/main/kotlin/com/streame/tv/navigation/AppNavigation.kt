@@ -5,9 +5,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -357,7 +359,7 @@ fun AppNavigation(
             }
             val initialSeason = backStackEntry.arguments?.getInt("initialSeason")?.takeIf { it >= 0 }
             val initialEpisode = backStackEntry.arguments?.getInt("initialEpisode")?.takeIf { it >= 0 }
-            val mediaType = if (mediaTypeStr == "tv") MediaType.TV else MediaType.MOVIE
+            val mediaType = if (mediaTypeStr == "tv") MediaType.TV else if (mediaTypeStr == "movie") MediaType.MOVIE else MediaType.MOVIE
 
             DetailsScreen(
                 mediaType = mediaType,
@@ -414,7 +416,10 @@ fun AppNavigation(
             )
         ) { backStackEntry ->
             val playbackId = backStackEntry.arguments?.getString("playbackId") ?: ""
-            val params = PlaybackParamsStore.consume(playbackId)
+            val params = remember { PlaybackParamsStore.get(playbackId) }
+            DisposableEffect(playbackId) {
+                onDispose { PlaybackParamsStore.removeOnDispose(playbackId) }
+            }
 
             if (params != null) {
                 PlayerScreen(

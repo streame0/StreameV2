@@ -157,6 +157,7 @@ import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.viewModelScope
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -251,9 +252,11 @@ fun PlayerScreen(
     var controlsSeekJob by remember { mutableStateOf<Job?>(null) }
 
     // Volume state
-    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: android.media.AudioManager::class.java.getDeclaredConstructor().newInstance() }
-    var currentVolume by remember { mutableIntStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
-    val maxVolume = remember { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
+    val audioManager = remember {
+        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    }
+    var currentVolume by remember { mutableIntStateOf(audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0) }
+    val maxVolume = remember { audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 1 }
     var showVolumeIndicator by remember { mutableStateOf(false) }
     var volumeIndicatorTrigger by remember { mutableIntStateOf(0) }
     var showAspectIndicator by remember { mutableStateOf(false) }
@@ -293,10 +296,11 @@ fun PlayerScreen(
     var subtitleLangIndex by remember { mutableIntStateOf(0) }
     var subtitleTrackIndex by remember { mutableIntStateOf(0) }
     var subtitlePanelFocus by remember { mutableIntStateOf(0) } // 0=lang panel, 1=track panel
-    val subtitleGroups = remember(uiState.subtitles, uiState.preferredSubtitleLang, uiState.secondarySubtitleLang) {
+    var mobileAiSelected by remember { mutableStateOf<String?>(null) }
+    val subtitleGroups = remember(uiState.subtitles, uiState.preferredSubtitleLang, uiState.secondarySubtitleLang, uiState.isAiAvailable, uiState.aiTargetLanguageName) {
         val primaryName = getFullLanguageName(uiState.preferredSubtitleLang)
         val secondaryName = getFullLanguageName(uiState.secondarySubtitleLang)
-        uiState.subtitles.mapIndexed { idx, sub -> Pair(idx, sub) }
+        val groups = uiState.subtitles.mapIndexed { idx, sub -> Pair(idx, sub) }
             .groupBy { (_, sub) -> getFullLanguageName(sub.lang).ifBlank { sub.lang.ifBlank { "Unknown" } } }
             .entries
             .sortedWith(compareBy(
@@ -310,6 +314,12 @@ fun PlayerScreen(
                 { (langName, _) -> langName }
             ))
             .map { (langName, items) -> Pair(langName, items) }
+            .toMutableList()
+        if (uiState.isAiAvailable && uiState.aiTargetLanguageName.isNotBlank() &&
+            groups.none { (name, _) -> name.equals(uiState.aiTargetLanguageName, ignoreCase = true) }) {
+            groups.add(0, Pair(uiState.aiTargetLanguageName, emptyList()))
+        }
+        groups
     }
     // Audio tracks from ExoPlayer
     var audioTracks by remember { mutableStateOf<List<AudioTrackInfo>>(emptyList()) }
@@ -502,12 +512,14 @@ fun PlayerScreen(
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(mediaSourceFactory)
             .setRenderersFactory(
-                DefaultRenderersFactory(context)
-                    // Use hardware decoders first; extension decoders only as fallback.
-                    // MODE_PREFER forces software decoding which is slow/jumpy on TV.
-                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-                    // Enable fallback decoders for any format issues
-                    .setEnableDecoderFallback(true)
+                AiSubtitleRenderersFactory(
+                    context = context,
+                    translationManager = viewModel.translationManager,
+                    scope = viewModel.viewModelScope
+                ).apply {
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                    setEnableDecoderFallback(true)
+                }
             )
             .setLoadControl(loadControl)
             // Configure track selection for maximum compatibility
@@ -1151,15 +1163,17 @@ fun PlayerScreen(
             }
 
             val resumePosition = uiState.savedPosition
-            if (resumePosition > 0L) {
-                exoPlayer.setMediaSource(mediaSource, resumePosition)
-            } else {
-                exoPlayer.setMediaSource(mediaSource)
+            runCatching {
+                if (resumePosition > 0L) {
+                    exoPlayer.setMediaSource(mediaSource, resumePosition)
+                } else {
+                    exoPlayer.setMediaSource(mediaSource)
+                }
+                // Let ExoPlayer's LoadControl handle buffering (bufferForPlaybackMs = 500ms).
+                // No manual startup gate — trust the CDN/debrid to deliver fast enough.
+                exoPlayer.playWhenReady = true
+                exoPlayer.prepare()
             }
-            // Let ExoPlayer's LoadControl handle buffering (bufferForPlaybackMs = 500ms).
-            // No manual startup gate — trust the CDN/debrid to deliver fast enough.
-            exoPlayer.playWhenReady = true
-            exoPlayer.prepare()
 
             // Prefer currently selected subtitle language (if any), otherwise keep text disabled.
             val subtitle = uiState.selectedSubtitle
@@ -1344,7 +1358,7 @@ fun PlayerScreen(
     // Volume helpers
     fun adjustVolume(direction: Int) {
         val newVolume = (currentVolume + direction).coerceIn(0, maxVolume)
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
+        audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
         currentVolume = newVolume
         isMuted = newVolume == 0
         showVolumeIndicator = true
@@ -1353,12 +1367,12 @@ fun PlayerScreen(
 
     fun toggleMute() {
         if (isMuted) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volumeBeforeMute, 0)
+            audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, volumeBeforeMute, 0)
             currentVolume = volumeBeforeMute
             isMuted = false
         } else {
             volumeBeforeMute = currentVolume
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
             currentVolume = 0
             isMuted = true
         }
@@ -1370,80 +1384,79 @@ fun PlayerScreen(
     LaunchedEffect(exoPlayer) {
         while (!playerReleasedAtomic.get()) {
             if (playerReleasedAtomic.get()) break
-            currentPosition = runCatching { exoPlayer.currentPosition }.getOrDefault(currentPosition)
-            viewModel.onPlaybackPosition(currentPosition)
-            val rawDuration = exoPlayer.duration
-            duration = if (rawDuration > 0L && rawDuration != C.TIME_UNSET) rawDuration else 0L
-            progress = if (duration > 0L) {
-                (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-            } else {
-                0f
-            }
-            isPlaying = exoPlayer.isPlaying
-            isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING
-
-            // Buffering watchdog - detect long buffering but do not force a source error popup.
-            if (isBuffering && hasPlaybackStarted) {
-                if (bufferingStartTime == null) {
-                    bufferingStartTime = System.currentTimeMillis()
+            runCatching {
+                currentPosition = runCatching { exoPlayer.currentPosition }.getOrDefault(currentPosition)
+                viewModel.onPlaybackPosition(currentPosition)
+                val rawDuration = exoPlayer.duration
+                duration = if (rawDuration > 0L && rawDuration != C.TIME_UNSET) rawDuration else 0L
+                progress = if (duration > 0L) {
+                    (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
                 } else {
-                    val bufferingDuration = System.currentTimeMillis() - (bufferingStartTime ?: 0L)
-                    if (bufferingDuration > bufferingTimeoutMs) {
-                        bufferingStartTime = null
-                        longRebufferCount += 1
-                        viewModel.onLongRebufferDetected()
-                        if (allowMidPlaybackSourceFallback &&
-                            !userSelectedSourceManually &&
-                            longRebufferCount >= 1 &&
-                            tryAdvanceToNextStream()
-                        ) {
-                            continue
-                        }
-                        if (!rebufferRecoverAttempted) {
-                            rebufferRecoverAttempted = true
-                            // Avoid hard re-prepare loops that can worsen long-form buffering.
-                            // Nudge playback state only; let load control continue buffering.
-                            exoPlayer.playWhenReady = true
+                    0f
+                }
+                isPlaying = exoPlayer.isPlaying
+                isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING
+
+                // Buffering watchdog - detect long buffering but do not force a source error popup.
+                if (isBuffering && hasPlaybackStarted) {
+                    if (bufferingStartTime == null) {
+                        bufferingStartTime = System.currentTimeMillis()
+                    } else {
+                        val bufferingDuration = System.currentTimeMillis() - (bufferingStartTime ?: 0L)
+                        if (bufferingDuration > bufferingTimeoutMs) {
+                            bufferingStartTime = null
+                            longRebufferCount += 1
+                            viewModel.onLongRebufferDetected()
+                            if (allowMidPlaybackSourceFallback &&
+                                !userSelectedSourceManually &&
+                                longRebufferCount >= 1 &&
+                                tryAdvanceToNextStream()
+                            ) {
+                                return@runCatching
+                            }
+                            if (!rebufferRecoverAttempted) {
+                                rebufferRecoverAttempted = true
+                                exoPlayer.playWhenReady = true
+                            }
                         }
                     }
+                } else {
+                    bufferingStartTime = null
+                    if (exoPlayer.isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
+                        longRebufferCount = 0
+                    }
                 }
-            } else {
-                bufferingStartTime = null
-                if (exoPlayer.isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
-                    longRebufferCount = 0
-                }
-            }
 
-            // Initial startup watchdog: while first frame has not really started, enforce bounded startup.
-            val startupPending = uiState.selectedStreamUrl != null && !hasPlaybackStarted
-            val startupStalled =
-                (
-                    exoPlayer.playbackState == Player.STATE_BUFFERING ||
-                        (exoPlayer.playbackState == Player.STATE_READY && !exoPlayer.isPlaying) ||
-                        exoPlayer.playbackState == Player.STATE_IDLE
-                )
-            if (startupPending) {
-                val selectedAt = streamSelectedTime ?: System.currentTimeMillis()
-                val startupBufferDuration = System.currentTimeMillis() - selectedAt
-                val isHeavyStartupSource = isLikelyHeavyStream(uiState.selectedStream)
-                if (startupStalled && startupBufferDuration > initialBufferingTimeoutMs) {
-                    if (!startupRecoverAttempted) {
-                        startupRecoverAttempted = true
+                // Initial startup watchdog: while first frame has not really started, enforce bounded startup.
+                val startupPending = uiState.selectedStreamUrl != null && !hasPlaybackStarted
+                val startupStalled =
+                    (
+                        exoPlayer.playbackState == Player.STATE_BUFFERING ||
+                            (exoPlayer.playbackState == Player.STATE_READY && !exoPlayer.isPlaying) ||
+                            exoPlayer.playbackState == Player.STATE_IDLE
+                    )
+                if (startupPending) {
+                    val selectedAt = streamSelectedTime ?: System.currentTimeMillis()
+                    val startupBufferDuration = System.currentTimeMillis() - selectedAt
+                    val isHeavyStartupSource = isLikelyHeavyStream(uiState.selectedStream)
+                    if (startupStalled && startupBufferDuration > initialBufferingTimeoutMs) {
+                        if (!startupRecoverAttempted) {
+                            startupRecoverAttempted = true
+                            if (allowStartupSourceFallback &&
+                                !userSelectedSourceManually &&
+                                tryAdvanceToNextStream()
+                            ) {
+                                return@runCatching
+                            } else if (!isHeavyStartupSource) {
+                                exoPlayer.playWhenReady = true
+                            }
+                        }
+                    }
+                    val hardTimeoutMs = (initialBufferingTimeoutMs + if (isHeavyStartupSource) 12_000L else 8_000L)
+                        .coerceAtMost(45_000L)
+                    if (!startupHardFailureReported && startupBufferDuration > hardTimeoutMs) {
                         if (allowStartupSourceFallback &&
                             !userSelectedSourceManually &&
-                            tryAdvanceToNextStream()
-                        ) {
-                            // auto advanced to a fallback stream
-                        } else if (!isHeavyStartupSource) {
-                            exoPlayer.playWhenReady = true
-                        }
-                    }
-                }
-                val hardTimeoutMs = (initialBufferingTimeoutMs + if (isHeavyStartupSource) 12_000L else 8_000L)
-                    .coerceAtMost(45_000L)
-                if (!startupHardFailureReported && startupBufferDuration > hardTimeoutMs) {
-                    if (allowStartupSourceFallback &&
-                        !userSelectedSourceManually &&
                         tryAdvanceToNextStream()
                     ) {
                         // auto advanced to a fallback stream
@@ -1571,6 +1584,7 @@ fun PlayerScreen(
                 }
             }
 
+            }
             val tickDelayMs = when {
                 !hasPlaybackStarted -> 150L
                 uiState.activeSkipInterval != null && !uiState.skipIntervalDismissed -> 200L
@@ -1610,7 +1624,7 @@ fun PlayerScreen(
             // intentionally or accidentally scrolled the volume down.
             if (isMuted || currentVolume == 0) {
                 val restoreLevel = volumeBeforeMute.coerceAtLeast(1)
-                runCatching { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, restoreLevel, 0) }
+                audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, restoreLevel, 0)
             }
         }
     }
@@ -1646,6 +1660,14 @@ fun PlayerScreen(
                 enhancer?.enabled = false
                 enhancer?.release()
             }
+        }
+    }
+
+    // Auto-dismiss AI error toast after 5 seconds
+    LaunchedEffect(uiState.aiErrorToast) {
+        if (uiState.aiErrorToast != null) {
+            delay(5_000L)
+            viewModel.dismissAiErrorToast()
         }
     }
 
@@ -1692,9 +1714,9 @@ fun PlayerScreen(
     }
 
     BackHandler(
-        enabled = !showSubtitleMenu && !showSourceMenu && !showNextEpisodePrompt && uiState.error == null
+        enabled = !showSubtitleMenu && !showSourceMenu && !showNextEpisodePrompt
     ) {
-        if (showControls) {
+        if (showControls && uiState.error == null) {
             showControls = false
         } else {
             onBack()
@@ -1966,14 +1988,34 @@ fun PlayerScreen(
                                             try { subtitleButtonFocusRequester.requestFocus() } catch (_: Exception) {}
                                         }
                                     } else {
-                                        // Enter track panel for the selected language
-                                        subtitlePanelFocus = 1
-                                        subtitleTrackIndex = 0
+                                        val selectedGroup = subtitleGroups.getOrNull(subtitleLangIndex - 1)
+                                        // If this is the AI language group (empty track list), activate AI directly
+                                        if (selectedGroup != null && selectedGroup.second.isEmpty() &&
+                                            uiState.isAiAvailable && uiState.aiTargetLanguageName.isNotBlank() &&
+                                            selectedGroup.first.equals(uiState.aiTargetLanguageName, ignoreCase = true)) {
+                                            viewModel.activateAiSubtitle()
+                                            showSubtitleMenu = false
+                                            showControls = true
+                                            coroutineScope.launch {
+                                                delay(150)
+                                                try { subtitleButtonFocusRequester.requestFocus() } catch (_: Exception) {}
+                                            }
+                                        } else {
+                                            // Enter track panel for the selected language
+                                            subtitlePanelFocus = 1
+                                            subtitleTrackIndex = 0
+                                        }
                                     }
                                 } else {
-                                    subtitleGroups.getOrNull(subtitleLangIndex - 1)
-                                        ?.second?.getOrNull(subtitleTrackIndex)?.second
-                                        ?.let { viewModel.selectSubtitle(it) }
+                                    val trackGroup = subtitleGroups.getOrNull(subtitleLangIndex - 1)
+                                    if (trackGroup != null && trackGroup.second.isEmpty() &&
+                                        uiState.isAiAvailable && uiState.aiTargetLanguageName.isNotBlank() &&
+                                        trackGroup.first.equals(uiState.aiTargetLanguageName, ignoreCase = true)) {
+                                        viewModel.activateAiSubtitle()
+                                    } else {
+                                        trackGroup?.second?.getOrNull(subtitleTrackIndex)?.second
+                                            ?.let { viewModel.selectSubtitle(it) }
+                                    }
                                     showSubtitleMenu = false
                                     showControls = true
                                     coroutineScope.launch {
@@ -2078,9 +2120,12 @@ fun PlayerScreen(
                             showControls = true
                             true
                         }
-                        // Any other key shows controls
+                        // Any other key shows controls (but NOT Key.Back —
+                        // BackHandler must receive it for proper TV navigation)
                         else -> {
-                            if (!showControls) {
+                            if (event.key == Key.Back) {
+                                false // Let BackHandler handle it
+                            } else if (!showControls) {
                                 showControls = true
                                 true
                             } else {
@@ -2290,12 +2335,14 @@ fun PlayerScreen(
                     Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(end = 8.dp)) {
                         val currentTime = remember { mutableStateOf("") }
                         val endsAtTime = remember { mutableStateOf("") }
-                        LaunchedEffect(duration, currentPosition, clockFormat) {
+                        LaunchedEffect(clockFormat) {
                             while (true) {
                                 val now = System.currentTimeMillis()
+                                val pos = currentPosition
+                                val dur = duration
                                 currentTime.value = formatPlayerClockTime(now, clockFormat)
-                                if (duration > 0 && currentPosition >= 0) {
-                                    val remainingMs = (duration - currentPosition).coerceAtLeast(0L)
+                                if (dur > 0 && pos >= 0) {
+                                    val remainingMs = (dur - pos).coerceAtLeast(0L)
                                     endsAtTime.value = formatPlayerClockTime(now + remainingMs, clockFormat)
                                 } else { endsAtTime.value = "" }
                                 kotlinx.coroutines.delay(1000)
@@ -2612,6 +2659,15 @@ fun PlayerScreen(
                         try { subtitleButtonFocusRequester.requestFocus() } catch (_: Exception) {}
                     }
                 },
+                onActivateAi = {
+                    viewModel.activateAiSubtitle()
+                    showSubtitleMenu = false
+                    showControls = true
+                    coroutineScope.launch {
+                        delay(150)
+                        try { subtitleButtonFocusRequester.requestFocus() } catch (_: Exception) {}
+                    }
+                },
                 onSelectAudio = { track ->
                     applyAudioTrackSelection(exoPlayer, track, audioTracks)?.let {
                         selectedAudioIndex = it
@@ -2855,6 +2911,32 @@ fun PlayerScreen(
                         )
                     }
                 }
+            }
+        }
+
+        // AI subtitle error toast
+        AnimatedVisibility(
+            visible = uiState.aiErrorToast != null,
+            enter = fadeIn(androidx.compose.animation.core.tween(200)),
+            exit = fadeOut(androidx.compose.animation.core.tween(500))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 120.dp)
+                    .padding(horizontal = 48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = uiState.aiErrorToast ?: "",
+                    style = StreameTypography.body.copy(fontSize = 12.sp),
+                    color = Color.White.copy(alpha = 0.9f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .background(Color(0xFF2A2A2A).copy(alpha = 0.95f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                )
             }
         }
 
@@ -3379,6 +3461,7 @@ private fun SubtitleMenu(
     subtitlePanelFocus: Int,
     onTabChanged: (Int) -> Unit,
     onSelectSubtitle: (Int) -> Unit,
+    onActivateAi: () -> Unit,
     onSelectAudio: (AudioTrackInfo) -> Unit,
     onClose: () -> Unit
 ) {
@@ -3736,18 +3819,14 @@ private fun SubtitleMenu(
                                         .padding(start = 16.dp, top = 8.dp, bottom = 2.dp)
                                 )
                             }
-                            indexedSubs.forEach { (originalIndex, sub) ->
-                                item(key = "mobile_${sub.id}") {
-                                    val trackLabel = sub.label.ifBlank { sub.lang }
-                                    val languageInfo = getFullLanguageName(sub.lang)
-                                    val description = if (trackLabel.lowercase() != languageInfo.lowercase() &&
-                                        !trackLabel.lowercase().contains(languageInfo.lowercase())
-                                    ) languageInfo else null
+                            if (indexedSubs.isEmpty()) {
+                                // AI subtitle group or empty group
+                                item(key = "mobile_ai_$langName") {
                                     MobileTrackItem(
-                                        name = trackLabel,
-                                        description = description,
-                                        isSelected = selectedSubtitle?.id == sub.id,
-                                        onClick = { onSelectSubtitle(originalIndex + 1) }
+                                        name = "AI \u2014 $langName",
+                                        description = null,
+                                        isSelected = false,
+                                        onClick = { onActivateAi() }
                                     )
                                     Box(
                                         modifier = Modifier
@@ -3756,6 +3835,29 @@ private fun SubtitleMenu(
                                             .height(1.dp)
                                             .background(Color.White.copy(alpha = 0.06f))
                                     )
+                                }
+                            } else {
+                                indexedSubs.forEach { (originalIndex, sub) ->
+                                    item(key = "mobile_${sub.id}") {
+                                        val trackLabel = sub.label.ifBlank { sub.lang }
+                                        val languageInfo = getFullLanguageName(sub.lang)
+                                        val description = if (trackLabel.lowercase() != languageInfo.lowercase() &&
+                                            !trackLabel.lowercase().contains(languageInfo.lowercase())
+                                        ) languageInfo else null
+                                        MobileTrackItem(
+                                            name = trackLabel,
+                                            description = description,
+                                            isSelected = selectedSubtitle?.id == sub.id,
+                                            onClick = { onSelectSubtitle(originalIndex + 1) }
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 8.dp)
+                                                .height(1.dp)
+                                                .background(Color.White.copy(alpha = 0.06f))
+                                        )
+                                    }
                                 }
                             }
                         }

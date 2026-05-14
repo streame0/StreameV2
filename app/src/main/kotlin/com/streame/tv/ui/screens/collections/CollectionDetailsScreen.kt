@@ -393,7 +393,8 @@ fun CollectionDetailsScreen(
         uiState.supportsSeries -> CollectionTab.SERIES
         else -> CollectionTab.MOVIES
     }
-    var selectedTab by rememberSaveable(uiState.catalog?.id) { mutableStateOf(initialTab) }
+    val catalogIdKey = uiState.catalog?.id ?: "no-catalog"
+    var selectedTab by rememberSaveable(catalogIdKey) { mutableStateOf(initialTab) }
     val moviesGridState = rememberTvLazyGridState()
     val seriesGridState = rememberTvLazyGridState()
     val moviesTabFocusRequester = remember { FocusRequester() }

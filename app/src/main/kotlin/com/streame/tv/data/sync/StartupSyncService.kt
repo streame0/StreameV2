@@ -129,12 +129,12 @@ class StartupSyncService @Inject constructor(
             invalidationBus.suppressDuringRemoteApply {
                 // Parallel pull for independent data
                 kotlinx.coroutines.coroutineScope {
-                    launch { applyRemoteAddons(profileId) }
-                    launch { librarySyncService.pullFromRemote(profileId) }
-                    launch { collectionSyncService.pullFromRemote(profileId) }
-                    launch { profileSettingsSyncService.pullFromRemote(profileId) }
-                    launch { profileSyncService.pullFromRemote() }
-                    launch { homeCatalogSettingsSyncService.pullFromRemote(profileId) }
+                    launch { runCatching { applyRemoteAddons(profileId) } }
+                    launch { runCatching { librarySyncService.pullFromRemote(profileId) } }
+                    launch { runCatching { collectionSyncService.pullFromRemote(profileId) } }
+                    launch { runCatching { profileSettingsSyncService.pullFromRemote(profileId) } }
+                    launch { runCatching { profileSyncService.pullFromRemote() } }
+                    launch { runCatching { homeCatalogSettingsSyncService.pullFromRemote(profileId) } }
                 }
 
                 // Sequential pull for watch progress (large table, pull last)

@@ -51,13 +51,14 @@ fun ContinueWatchingCard(
     progress: Float = 0f, // 0.0 to 1.0
     episodeInfo: String? = null,
     timeRemaining: String? = null,
+    modifier: Modifier = Modifier,
     width: Dp = 340.dp,
     isFocused: Boolean = false,
     onClick: () -> Unit = {},
 ) {
     val shape = rememberStreameCardShape(StreameSkin.radius.md)
 
-    Column(modifier = Modifier.width(width)) {
+    Column(modifier = modifier.width(width)) {
         StreameFocusableSurface(
             modifier = Modifier
                 .fillMaxWidth()

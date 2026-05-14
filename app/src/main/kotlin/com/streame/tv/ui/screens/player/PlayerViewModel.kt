@@ -2,6 +2,7 @@ package com.streame.tv.ui.screens.player
 
 import android.content.Context
 import android.util.Log
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
@@ -80,7 +81,15 @@ data class PlayerUiState(
     val streamProgress: Float? = null,
     // Human-readable phase label for the loading UI (e.g. "Searching 3/8
     // sources"). Null when progress isn't meaningful.
-    val streamLoadPhase: String? = null
+    val streamLoadPhase: String? = null,
+    // True while AI subtitle translation is active for this playback session
+    val isAiTranslating: Boolean = false,
+    // True when AI translation is available (settings enabled + source track exists), even if not currently active
+    val isAiAvailable: Boolean = false,
+    // Language name being translated into (e.g. "Hebrew") when AI is available
+    val aiTargetLanguageName: String = "",
+    // Non-null while an AI translation API error toast should be visible
+    val aiErrorToast: String? = null
 )
 
 @HiltViewModel
@@ -142,6 +151,52 @@ class PlayerViewModel @Inject constructor(
     // Subtitle helper — extracted logic for testability and reduced file size
     private val subtitleHelper = PlayerSubtitleHelper(context, profileManager, gson)
 
+    // AI subtitle settings (read once per video load)
+    private var aiSubtitleEnabled = false
+    private var aiSubtitleAutoSelect = false
+    private var aiApiKey = ""
+    private var aiModel = SubtitleAiModel.GROQ_LLAMA_70B
+    private var aiRemoveHearingImpaired = true
+    private var hasManualSubtitleSelection = false
+
+    // Global AI subtitle DataStore keys (device-wide, not profile-scoped)
+    private val aiEnabledKey = booleanPreferencesKey("subtitle_ai_enabled")
+    private val aiAutoSelectKey = booleanPreferencesKey("subtitle_ai_auto_select")
+    private val aiApiKeyKey = stringPreferencesKey("subtitle_ai_api_key")
+    private val aiModelKey = stringPreferencesKey("subtitle_ai_model")
+    private val aiRemoveHearingImpairedKey = booleanPreferencesKey("subtitle_remove_hearing_impaired")
+
+    private val _isTranslatingLive = MutableStateFlow(false)
+    val isTranslatingLive: kotlinx.coroutines.flow.StateFlow<Boolean> = _isTranslatingLive.asStateFlow()
+
+    // True after the first API error toast has been shown for the current AI session.
+    private var aiErrorToastShown = false
+    // The source subtitle used for AI translation — retained so the user can re-activate AI after switching away.
+    private var aiSourceSubtitle: Subtitle? = null
+
+    val translationManager: SubtitleTranslationManager = SubtitleTranslationManager(
+        service = SubtitleTranslationService(
+            apiKeyProvider = { aiApiKey },
+            modelProvider = { aiModel }
+        ),
+        targetLanguage = "",
+        scope = viewModelScope
+    ).also { mgr ->
+        mgr.onTranslatingChanged = { isTranslating -> _isTranslatingLive.value = isTranslating }
+        mgr.onBatchResult = { success, errorMessage ->
+            if (!success && !aiErrorToastShown) {
+                aiErrorToastShown = true
+                val msg = when {
+                    errorMessage == "API key missing" -> "AI subtitles: no API key set. Add it in Settings \u2192 General."
+                    errorMessage == "RATE_LIMITED"    -> "AI subtitles: rate limit hit \u2014 translation paused."
+                    errorMessage?.startsWith("HTTP 401") == true -> "AI subtitles: invalid API key."
+                    else -> "AI subtitles: translation error \u2014 ${errorMessage.orEmpty()}"
+                }
+                _uiState.value = _uiState.value.copy(aiErrorToast = msg)
+            }
+        }
+    }
+
     private fun defaultSubtitleKey() = subtitleHelper.defaultSubtitleKey()
     private fun defaultAudioLanguageKey() = profileManager.profileStringKey("default_audio_language")
     private fun subtitleUsageKey() = subtitleHelper.subtitleUsageKey()
@@ -183,6 +238,9 @@ class PlayerViewModel @Inject constructor(
         currentEpisodeTitle = null
         hasMarkedWatched = false
         userManuallySelectedStream = false
+        hasManualSubtitleSelection = false
+        aiSourceSubtitle = null
+        aiErrorToastShown = false
         lastIsPlaying = false
         lastScrobbleTime = 0
         lastWatchHistorySaveTime = 0
@@ -215,6 +273,16 @@ class PlayerViewModel @Inject constructor(
                 .let { if (isSubtitleDisabledPreference(it)) "" else it }
             val secondarySub = prefs[secondarySubtitleKey()]?.trim().orEmpty()
                 .let { if (isSubtitleDisabledPreference(it)) "" else it }
+            // AI subtitle settings
+            aiSubtitleEnabled = prefs[aiEnabledKey] ?: false
+            aiSubtitleAutoSelect = prefs[aiAutoSelectKey] ?: false
+            aiApiKey = prefs[aiApiKeyKey] ?: ""
+            aiModel = runCatching {
+                val modelStr = prefs[aiModelKey] ?: SubtitleAiModel.GROQ_LLAMA_70B.name
+                SubtitleAiModel.valueOf(modelStr)
+            }.getOrDefault(SubtitleAiModel.GROQ_LLAMA_70B)
+            aiRemoveHearingImpaired = prefs[aiRemoveHearingImpairedKey] ?: true
+            translationManager.updateService(aiApiKey, aiModel)
             _uiState.value = PlayerUiState(
                 isLoading = true,
                 isLoadingStreams = true,
@@ -460,14 +528,12 @@ class PlayerViewModel @Inject constructor(
                 var isFirstEmission = true
 
                 progressiveFlow.collect { progressive ->
-                    val allStreams = progressive.streams
-                        .filter { stream ->
-                            val u = stream.url?.trim().orEmpty()
-                            u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
-                        }
+                    // Keep ALL streams for display in the StreamSelector (including
+                    // magnet/blank-URL torrent sources). The autoplay selector and
+                    // selectStream() handle resolution via debrid / TorrServer.
                     val mergedStreams = sortStreamsByQualityAndSize(
-                        allStreams
-                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" },
+                        progressive.streams
+                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.infoHash.orEmpty()}|${it.source}" },
                         preferredLanguage
                     )
                     lastMergedStreams = mergedStreams
@@ -716,8 +782,160 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun applyPreferredSubtitle(preference: String, subtitles: List<Subtitle>, fallbackLanguage: String?) {
-        val selected = subtitleHelper.applyPreferredSubtitle(preference, subtitles, fallbackLanguage)
-        _uiState.value = _uiState.value.copy(selectedSubtitle = selected)
+        if (isSubtitleDisabledPreference(preference)) {
+            _uiState.value = _uiState.value.copy(selectedSubtitle = null)
+            return
+        }
+
+        val normalizedPref = PlayerSubtitleHelper.normalizeLanguage(preference)
+        val normalizedFallback = fallbackLanguage
+            ?.let { PlayerSubtitleHelper.normalizeLanguage(it) }
+            ?.takeIf { it.isNotBlank() && it != normalizedPref }
+
+        fun subtitleTokens(sub: Subtitle): Set<String> {
+            val rawTokens = Regex("[A-Za-z-]+").findAll("${sub.lang} ${sub.label}")
+                .map { it.value }
+                .toList()
+            val normalized = rawTokens.map { PlayerSubtitleHelper.normalizeLanguage(it) }.filter { it.isNotBlank() }
+            return buildSet {
+                add(PlayerSubtitleHelper.normalizeLanguage(sub.lang))
+                add(PlayerSubtitleHelper.normalizeLanguage(sub.label))
+                addAll(normalized)
+            }.filter { it.isNotBlank() }.toSet()
+        }
+
+        fun bestMatch(target: String, pool: List<Subtitle> = subtitles): Subtitle? {
+            val byToken = pool.filter { sub -> subtitleTokens(sub).contains(target) }
+            val labelConsistent = byToken.filter { sub ->
+                val labelLang = PlayerSubtitleHelper.normalizeLanguage(sub.label)
+                val labelMappedToKnown = sub.label.isNotBlank() && labelLang != sub.label.lowercase().trim()
+                !labelMappedToKnown || labelLang == target
+            }
+            val candidates = when {
+                labelConsistent.isNotEmpty() -> labelConsistent
+                byToken.isEmpty() -> {
+                    pool.filter { sub ->
+                        sub.label.lowercase().contains(target) || sub.lang.lowercase().contains(target)
+                    }
+                }
+                else -> emptyList()
+            }
+            if (candidates.isEmpty()) return null
+            val sorted = candidates.sortedWith(
+                compareByDescending<Subtitle> { if (it.isEmbedded) 1 else 0 }
+                    .thenBy { it.groupIndex ?: Int.MAX_VALUE }
+                    .thenBy { it.trackIndex ?: Int.MAX_VALUE }
+            )
+            return sorted.first()
+        }
+
+        val aiModeActive = aiSubtitleEnabled && aiSubtitleAutoSelect && normalizedPref.isNotBlank()
+        val aiEnabledForLanguage = aiSubtitleEnabled && normalizedPref.isNotBlank()
+        val embeddedOnly = subtitles.filter { it.isEmbedded }
+
+        val embeddedPrefMatch = bestMatch(normalizedPref, embeddedOnly)
+        val embeddedFallbackMatch = if (!aiEnabledForLanguage && embeddedPrefMatch == null && normalizedFallback != null)
+            bestMatch(normalizedFallback, embeddedOnly) else null
+        val embeddedMatch = embeddedPrefMatch ?: embeddedFallbackMatch
+
+        if (embeddedMatch != null) {
+            val isFallback = embeddedPrefMatch == null
+            if (!isFallback) {
+                translationManager.isEnabled = false
+                aiSourceSubtitle = null
+                _uiState.value = _uiState.value.copy(selectedSubtitle = embeddedMatch, isAiTranslating = false, isAiAvailable = false, aiTargetLanguageName = "")
+            }
+        } else if (aiModeActive) {
+            val source = findAiSourceSubtitle(subtitles)
+            if (source != null) {
+                val targetLangName = languageCodeToName(normalizedPref)
+                aiSourceSubtitle = source
+                translationManager.targetLanguage = targetLangName
+                translationManager.isEnabled = true
+                translationManager.reset()
+                aiErrorToastShown = false
+                _uiState.value = _uiState.value.copy(selectedSubtitle = source, isAiTranslating = true, isAiAvailable = true, aiTargetLanguageName = targetLangName, aiErrorToast = null)
+            } else {
+                val externalMatch = bestMatch(normalizedPref)
+                    ?: normalizedFallback?.let { bestMatch(it) }
+                if (externalMatch != null) {
+                    _uiState.value = _uiState.value.copy(selectedSubtitle = externalMatch, isAiTranslating = false, isAiAvailable = false, aiTargetLanguageName = "")
+                }
+            }
+        } else {
+            if (aiEnabledForLanguage) {
+                val source = findAiSourceSubtitle(subtitles)
+                if (source != null) {
+                    aiSourceSubtitle = source
+                    val targetLangName = languageCodeToName(normalizedPref)
+                    translationManager.targetLanguage = targetLangName
+                    _uiState.value = _uiState.value.copy(isAiAvailable = true, aiTargetLanguageName = targetLangName)
+                }
+            }
+            val externalMatch = bestMatch(normalizedPref)
+                ?: normalizedFallback?.let { bestMatch(it) }
+            if (externalMatch != null) {
+                if (aiEnabledForLanguage) {
+                    _uiState.value = _uiState.value.copy(selectedSubtitle = externalMatch, isAiTranslating = false)
+                } else {
+                    aiSourceSubtitle = null
+                    _uiState.value = _uiState.value.copy(selectedSubtitle = externalMatch, isAiTranslating = false, isAiAvailable = false, aiTargetLanguageName = "")
+                }
+            }
+        }
+    }
+
+    private fun findAiSourceSubtitle(subtitles: List<Subtitle>): Subtitle? {
+        return subtitles.firstOrNull { it.isEmbedded && PlayerSubtitleHelper.normalizeLanguage(it.lang) == "en" }
+            ?: subtitles.firstOrNull { it.isEmbedded && it.lang.isNotBlank() }
+            ?: subtitles.firstOrNull { it.isEmbedded }
+            ?: subtitles.firstOrNull()
+    }
+
+    private fun languageCodeToName(code: String): String {
+        return when (code.lowercase().trim()) {
+            "he", "hebrew", "iw" -> "Hebrew"
+            "ar", "arabic" -> "Arabic"
+            "fa", "persian", "farsi" -> "Persian"
+            "ur", "urdu" -> "Urdu"
+            "yi", "yiddish" -> "Yiddish"
+            "ru", "russian" -> "Russian"
+            "zh", "chinese" -> "Chinese"
+            "ja", "japanese" -> "Japanese"
+            "ko", "korean" -> "Korean"
+            "fr", "french" -> "French"
+            "de", "german" -> "German"
+            "es", "spanish" -> "Spanish"
+            "it", "italian" -> "Italian"
+            "pt", "portuguese" -> "Portuguese"
+            "pt-br", "pob" -> "Brazilian Portuguese"
+            "nl", "dutch" -> "Dutch"
+            "pl", "polish" -> "Polish"
+            "tr", "turkish" -> "Turkish"
+            "sv", "swedish" -> "Swedish"
+            "no", "norwegian" -> "Norwegian"
+            "da", "danish" -> "Danish"
+            "fi", "finnish" -> "Finnish"
+            "el", "greek" -> "Greek"
+            "cs", "czech" -> "Czech"
+            "hu", "hungarian" -> "Hungarian"
+            "ro", "romanian" -> "Romanian"
+            "th", "thai" -> "Thai"
+            "vi", "vietnamese" -> "Vietnamese"
+            "id", "indonesian" -> "Indonesian"
+            "hi", "hindi" -> "Hindi"
+            "bn", "bengali" -> "Bengali"
+            "bg", "bulgarian" -> "Bulgarian"
+            "hr", "croatian" -> "Croatian"
+            "sr", "serbian" -> "Serbian"
+            "sk", "slovak" -> "Slovak"
+            "sl", "slovenian" -> "Slovenian"
+            "lt", "lithuanian" -> "Lithuanian"
+            "et", "estonian" -> "Estonian"
+            "uk", "ukrainian" -> "Ukrainian"
+            "en", "english" -> "English"
+            else -> code.replaceFirstChar { it.uppercase() }
+        }
     }
 
     private fun isSubtitleDisabledPreference(value: String?): Boolean =
@@ -862,25 +1080,36 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun autoplaySelectBest(streams: List<StreamSource>, preferredLanguage: String) {
+        // Only consider streams with valid HTTP URLs for autoplay.
+        // The full list may now include magnet/blank-URL torrent streams for display.
+        val playable = streams.filter { stream ->
+            val u = stream.url?.trim().orEmpty()
+            u.startsWith("http", ignoreCase = true)
+        }
+        if (playable.isEmpty()) {
+            // No directly playable streams — don't auto-select; let user pick manually
+            return
+        }
+
         val preferredFromBingeGroup = currentPreferredBingeGroup?.let { preferredGroup ->
-            streams.firstOrNull { stream ->
+            playable.firstOrNull { stream ->
                 stream.behaviorHints?.bingeGroup == preferredGroup &&
                     (currentPreferredAddonId?.let { stream.addonId == it } ?: true)
-            } ?: streams.firstOrNull { stream ->
+            } ?: playable.firstOrNull { stream ->
                 stream.behaviorHints?.bingeGroup == preferredGroup
             }
         }
 
-        val preferredFromNavigation = streams.firstOrNull { s ->
+        val preferredFromNavigation = playable.firstOrNull { s ->
             val addonMatch = currentPreferredAddonId?.let { s.addonId == it } ?: true
             val sourceMatch = currentPreferredSourceName?.let { s.source == it } ?: true
             addonMatch && sourceMatch
-        } ?: streams.firstOrNull { s ->
+        } ?: playable.firstOrNull { s ->
             currentPreferredAddonId?.let { s.addonId == it } ?: false
         }
 
-        val stabilitySelected = pickPreferredStream(streams, preferredLanguage)
-        val selected = preferredFromBingeGroup ?: preferredFromNavigation ?: stabilitySelected ?: streams.first()
+        val stabilitySelected = pickPreferredStream(playable, preferredLanguage)
+        val selected = preferredFromBingeGroup ?: preferredFromNavigation ?: stabilitySelected ?: playable.first()
         selectStream(selected)
     }
 
@@ -1212,18 +1441,47 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectSubtitle(subtitle: Subtitle) {
+        hasManualSubtitleSelection = true
+        translationManager.isEnabled = false
         _uiState.value = _uiState.value.copy(
             selectedSubtitle = subtitle,
+            isAiTranslating = false,
             subtitleSelectionNonce = _uiState.value.subtitleSelectionNonce + 1
         )
         recordSubtitleUsage(subtitle)
     }
 
+    fun activateAiSubtitle() {
+        val source = aiSourceSubtitle ?: return
+        hasManualSubtitleSelection = true
+        val targetLangName = _uiState.value.aiTargetLanguageName
+        if (targetLangName.isNotBlank()) translationManager.targetLanguage = targetLangName
+        translationManager.isEnabled = true
+        translationManager.reset()
+        aiErrorToastShown = false
+        _uiState.value = _uiState.value.copy(
+            selectedSubtitle = source,
+            isAiTranslating = true,
+            isAiAvailable = true,
+            aiErrorToast = null
+        )
+    }
+
     fun disableSubtitles() {
+        hasManualSubtitleSelection = true
+        translationManager.isEnabled = false
+        aiSourceSubtitle = null
         _uiState.value = _uiState.value.copy(
             selectedSubtitle = null,
+            isAiTranslating = false,
+            isAiAvailable = false,
+            aiTargetLanguageName = "",
             subtitleSelectionNonce = _uiState.value.subtitleSelectionNonce + 1
         )
+    }
+
+    fun dismissAiErrorToast() {
+        _uiState.value = _uiState.value.copy(aiErrorToast = null)
     }
 
     private fun recordSubtitleUsage(subtitle: Subtitle) {

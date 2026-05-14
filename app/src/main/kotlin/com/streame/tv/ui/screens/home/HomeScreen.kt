@@ -495,18 +495,10 @@ fun HomeScreen(
     val profileCount = if (currentProfile != null) 1 else 0
     val usePosterCards = rememberCardLayoutMode() == CardLayoutMode.POSTER
     val lifecycleOwner = LocalLifecycleOwner.current
-    var suppressSelectUntilMs by remember { mutableLongStateOf(0L) }
-
-    LaunchedEffect(Unit) {
-        // Prevent stale select key events from previous screen from reopening details.
-        suppressSelectUntilMs = SystemClock.elapsedRealtime() + 150L
-    }
-
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshContinueWatchingOnly(force = true)
-                suppressSelectUntilMs = SystemClock.elapsedRealtime() + 150L
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -515,14 +507,20 @@ fun HomeScreen(
         }
     }
 
-    val displayCategories = if (uiState.categories.isNotEmpty()) {
-        uiState.categories
-    } else {
-        preloadedCategories
+    val displayCategories by remember {
+        derivedStateOf {
+            if (uiState.categories.isNotEmpty()) uiState.categories else preloadedCategories
+        }
     }
-    val displayHeroItem = uiState.heroItem ?: preloadedHeroItem
-        ?: displayCategories.firstOrNull()?.items?.firstOrNull()
-    val displayHeroLogo = uiState.heroLogoUrl ?: preloadedHeroLogoUrl
+    val displayHeroItem by remember {
+        derivedStateOf {
+            uiState.heroItem ?: preloadedHeroItem
+                ?: displayCategories.firstOrNull()?.items?.firstOrNull()
+        }
+    }
+    val displayHeroLogo by remember {
+        derivedStateOf { uiState.heroLogoUrl ?: preloadedHeroLogoUrl }
+    }
     val displayHeroOverview = uiState.heroOverviewOverride
     val latestDisplayCategories by rememberUpdatedState(displayCategories)
 
@@ -700,7 +698,8 @@ fun HomeScreen(
         }
     }
 
-    val isHeroCollection = displayHeroItem != null && viewModel.isCollectionItem(displayHeroItem)
+    val currentHeroItem = displayHeroItem
+    val isHeroCollection = currentHeroItem != null && viewModel.isCollectionItem(currentHeroItem)
     // Track service-collection "played once" — after the video ends we stop
     // re-spawning the player until the user focuses a *different* service.
     // Keyed on the focused collection id so re-entering the card after
@@ -847,9 +846,10 @@ fun HomeScreen(
                 }
 
                 // YouTube trailer auto-play (muted, no controls)
-                if (heroVideoUrl == null && uiState.trailerAutoPlay && uiState.heroTrailerKey != null) {
+                val trailerKey = uiState.heroTrailerKey
+                if (heroVideoUrl == null && uiState.trailerAutoPlay && trailerKey != null) {
                     TrailerPlayer(
-                        youtubeKey = uiState.heroTrailerKey!!,
+                        youtubeKey = trailerKey,
                         volume = 0f,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -922,7 +922,6 @@ fun HomeScreen(
             cardLogoUrls = cardLogoUrls,
             focusState = focusState,
             limitRowsDuringStartup = limitRowsDuringStartup,
-            suppressSelectUntilMs = suppressSelectUntilMs,
             contentStartPadding = contentStartPadding,
             fastScrollThresholdMs = fastScrollThresholdMs,
             usePosterCards = usePosterCards,
@@ -1035,14 +1034,10 @@ fun HomeScreen(
                     isWatched = item.isWatched,
                     isContinueWatching = contextMenuIsContinueWatching,
                     onPlay = {
-                        {
-                            onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)
-                        }
+                        onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)
                     },
                     onViewDetails = {
-                        {
-                            onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)
-                        }
+                        onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)
                     },
                     onToggleWatchlist = {
                         viewModel.toggleWatchlist(item)
@@ -2017,7 +2012,7 @@ private fun HomeInputLayer(
     cardLogoUrls: Map<String, String>,
     focusState: HomeFocusState,
     limitRowsDuringStartup: Boolean,
-    suppressSelectUntilMs: Long,
+    suppressSelectUntilMs: Long = 0L,
     contentStartPadding: androidx.compose.ui.unit.Dp,
     fastScrollThresholdMs: Long,
     usePosterCards: Boolean,

@@ -443,6 +443,7 @@ private fun ProfileDialogContent(
                         )
 
                         LazyRow(
+                            modifier = Modifier.height(56.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
                         ) {

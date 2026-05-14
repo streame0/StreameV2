@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.api.TraktDeviceCode
 import com.streame.tv.data.model.Addon
+import com.streame.tv.ui.screens.player.SubtitleAiModel
 import com.streame.tv.data.model.CatalogConfig
 import com.streame.tv.data.model.CatalogDiscoveryResult
 import com.streame.tv.data.model.CatalogKind
@@ -156,7 +157,13 @@ data class SettingsUiState(
     val toastType: ToastType = ToastType.INFO,
     // Supabase
     val isSupabaseAuthenticated: Boolean = false,
-    val supabaseEmail: String? = null
+    val supabaseEmail: String? = null,
+    // AI Subtitles
+    val subtitleAiEnabled: Boolean = false,
+    val subtitleAiModel: String = SubtitleAiModel.GROQ_LLAMA_70B.name,
+    val subtitleAiAutoSelect: Boolean = false,
+    val subtitleRemoveHearingImpaired: Boolean = true,
+    val subtitleAiApiKey: String = ""
 )
 
 @HiltViewModel
@@ -292,6 +299,11 @@ class SettingsViewModel @Inject constructor(
     // a handful of discrete dB values. Parsed back to Int on read.
     private fun volumeBoostDbKey() = profileManager.profileStringKey("volume_boost_db")
     private fun showLoadingStatsKey() = profileManager.profileBooleanKey("show_loading_stats")
+    private fun subtitleAiEnabledKey() = booleanPreferencesKey("subtitle_ai_enabled")
+    private fun subtitleAiAutoSelectKey() = booleanPreferencesKey("subtitle_ai_auto_select")
+    private fun subtitleAiApiKeyKey() = stringPreferencesKey("subtitle_ai_api_key")
+    private fun subtitleAiModelKey() = stringPreferencesKey("subtitle_ai_model")
+    private fun subtitleRemoveHearingImpairedKey() = booleanPreferencesKey("subtitle_remove_hearing_impaired")
 
     private fun subtitleSizeKey() = profileManager.profileStringKey("subtitle_size")
     private fun subtitleColorKey() = profileManager.profileStringKey("subtitle_color")
@@ -440,6 +452,13 @@ class SettingsViewModel @Inject constructor(
                 mediaRepository.getDefaultCatalogConfigs()
             }
 
+            // AI subtitle settings
+            val subtitleAiEnabled = prefs[subtitleAiEnabledKey()] ?: false
+            val subtitleAiModel = prefs[subtitleAiModelKey()] ?: SubtitleAiModel.GROQ_LLAMA_70B.name
+            val subtitleAiAutoSelect = prefs[subtitleAiAutoSelectKey()] ?: false
+            val subtitleRemoveHearingImpaired = prefs[subtitleRemoveHearingImpairedKey()] ?: true
+            val subtitleAiApiKey = prefs[subtitleAiApiKeyKey()] ?: ""
+
             val currentState = _uiState.value
             _uiState.value = currentState.copy(
                 defaultSubtitle = defaultSub,
@@ -460,6 +479,11 @@ class SettingsViewModel @Inject constructor(
                 subtitleColor = subtitleColor,
                 filterSubtitlesByLanguage = filterSubtitlesByLanguage,
                 secondarySubtitle = secondarySubtitle,
+                subtitleAiEnabled = subtitleAiEnabled,
+                subtitleAiModel = subtitleAiModel,
+                subtitleAiAutoSelect = subtitleAiAutoSelect,
+                subtitleRemoveHearingImpaired = subtitleRemoveHearingImpaired,
+                subtitleAiApiKey = subtitleAiApiKey,
                 dnsProvider = dnsProviderLabel(dnsProviderValue),
                 includeSpecials = includeSpecials,
                 isTraktAuthenticated = isTrakt,
@@ -838,6 +862,51 @@ class SettingsViewModel @Inject constructor(
             }
             _uiState.value = _uiState.value.copy(filterSubtitlesByLanguage = enabled)
             pushProfileSettingsToRemote()
+        }
+    }
+
+    fun setSubtitleAiEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[subtitleAiEnabledKey()] = enabled
+            }
+            _uiState.value = _uiState.value.copy(subtitleAiEnabled = enabled)
+        }
+    }
+
+    fun setSubtitleAiModel(model: String) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[subtitleAiModelKey()] = model
+            }
+            _uiState.value = _uiState.value.copy(subtitleAiModel = model)
+        }
+    }
+
+    fun setSubtitleAiAutoSelect(enabled: Boolean) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[subtitleAiAutoSelectKey()] = enabled
+            }
+            _uiState.value = _uiState.value.copy(subtitleAiAutoSelect = enabled)
+        }
+    }
+
+    fun setSubtitleRemoveHearingImpaired(enabled: Boolean) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[subtitleRemoveHearingImpairedKey()] = enabled
+            }
+            _uiState.value = _uiState.value.copy(subtitleRemoveHearingImpaired = enabled)
+        }
+    }
+
+    fun setSubtitleAiApiKey(key: String) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { prefs ->
+                prefs[subtitleAiApiKeyKey()] = key
+            }
+            _uiState.value = _uiState.value.copy(subtitleAiApiKey = key)
         }
     }
 

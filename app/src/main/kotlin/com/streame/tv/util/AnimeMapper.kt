@@ -1032,7 +1032,6 @@ class AnimeMapper @Inject constructor(
                     completed?.complete(Unit)
                 }
             } catch (e: Exception) {
-                // Keep the same error handling logic (return 0 in loop if cache miss persists)
                 cacheMutex.withLock {
                     val completed = inFlightRequests.remove(tmdbId)
                     completed?.complete(Unit)

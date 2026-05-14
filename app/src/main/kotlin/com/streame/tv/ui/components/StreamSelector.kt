@@ -113,6 +113,7 @@ fun StreamSelector(
     var focusedTabIndex by remember { mutableIntStateOf(0) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var focusZone by remember { mutableStateOf("streams") } // "tabs" or "streams"
+    var hasSelected by remember { mutableStateOf(false) }
     val listState = rememberTvLazyListState()
     val focusRequester = remember { FocusRequester() }
     val isMobile = LocalDeviceType.current.isTouchDevice()
@@ -125,6 +126,7 @@ fun StreamSelector(
             focusedTabIndex = 0
             selectedTabIndex = 0
             focusZone = "streams"
+            hasSelected = false
         }
     }
 
@@ -194,6 +196,30 @@ fun StreamSelector(
     // Flatten for navigation
     val flatStreams = filteredStreams
 
+    // Stabilize focused index when the stream list changes (progressive loading).
+    // Without this, streams can reorder under the user's focus, causing them to
+    // select a different stream than what they see (e.g., 1.6GB vs 12GB).
+    var lastFocusedStream by remember { mutableStateOf<StreamSource?>(null) }
+    LaunchedEffect(flatStreams) {
+        val prev = lastFocusedStream
+        if (prev != null && flatStreams.isNotEmpty()) {
+            // Try to find the same stream in the updated list
+            val newIndex = flatStreams.indexOf(prev)
+            focusedIndex = if (newIndex >= 0) {
+                newIndex
+            } else {
+                // Stream not found (removed by filter change) — clamp to bounds
+                focusedIndex.coerceIn(0, (flatStreams.size - 1).coerceAtLeast(0))
+            }
+        } else if (flatStreams.isNotEmpty()) {
+            focusedIndex = focusedIndex.coerceIn(0, (flatStreams.size - 1).coerceAtLeast(0))
+        }
+    }
+    // Track which stream the user is currently focused on
+    LaunchedEffect(focusedIndex, flatStreams) {
+        lastFocusedStream = flatStreams.getOrNull(focusedIndex)
+    }
+
     // Scroll to focused item
     LaunchedEffect(focusedIndex) {
         if (flatStreams.isNotEmpty() && focusedIndex < flatStreams.size) {
@@ -230,6 +256,7 @@ fun StreamSelector(
                 .focusable()
                 .background(Color.Black.copy(alpha = 0.95f))
                 .onKeyEvent { event ->
+                    if (hasSelected && event.key != Key.Escape) return@onKeyEvent true
                     if (event.type == KeyEventType.KeyDown) {
                         when (event.key) {
                             // Key.Back handled by BackHandler in DetailsScreen — not here
@@ -241,8 +268,8 @@ fun StreamSelector(
                                 if (focusZone == "tabs") {
                                     if (focusedTabIndex > 0) {
                                         focusedTabIndex--
-                                        selectedTabIndex = focusedTabIndex  // Immediately filter on focus
-                                        focusedIndex = 0  // Reset stream selection
+                                        selectedTabIndex = focusedTabIndex
+                                        focusedIndex = 0
                                     }
                                 } else {
                                     if (focusedIndex > 0) focusedIndex--
@@ -253,8 +280,8 @@ fun StreamSelector(
                                 if (focusZone == "tabs") {
                                     if (focusedTabIndex < tabLabels.size - 1) {
                                         focusedTabIndex++
-                                        selectedTabIndex = focusedTabIndex  // Immediately filter on focus
-                                        focusedIndex = 0  // Reset stream selection
+                                        selectedTabIndex = focusedTabIndex
+                                        focusedIndex = 0
                                     }
                                 } else {
                                     if (focusedIndex < flatStreams.size - 1) focusedIndex++
@@ -265,7 +292,6 @@ fun StreamSelector(
                                 if (focusZone == "streams" && tabLabels.size > 1) {
                                     focusZone = "tabs"
                                     focusedTabIndex = selectedTabIndex
-                                    // Filter already applied, no need to change selectedTabIndex
                                 }
                                 true
                             }
@@ -278,11 +304,11 @@ fun StreamSelector(
                             }
                             Key.Enter, Key.DirectionCenter -> {
                                 if (focusZone == "tabs") {
-                                    // Tab already selected on focus, just move to streams
                                     focusZone = "streams"
                                     focusedIndex = 0
                                 } else {
                                     flatStreams.getOrNull(focusedIndex)?.let { stream ->
+                                        hasSelected = true
                                         onSelect(stream)
                                     }
                                 }
@@ -493,7 +519,7 @@ fun StreamSelector(
                                         presentation = presentSource(stream),
                                         isFocused = index == focusedIndex,
                                         isSelected = stream == selectedStream,
-                                        onClick = { onSelect(stream) }
+                                        onClick = { if (!hasSelected) { hasSelected = true; onSelect(stream) } }
                                     )
                                 }
                             }
@@ -674,7 +700,7 @@ fun StreamSelector(
                                 MobileStreamCard(
                                     presentation = presentSource(stream),
                                     isSelected = stream == selectedStream,
-                                    onClick = { onSelect(stream) }
+                                    onClick = { if (!hasSelected) { hasSelected = true; onSelect(stream) } }
                                 )
                             }
                         }

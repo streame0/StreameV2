@@ -1,5 +1,6 @@
 package com.streame.tv.data.api
 
+import androidx.annotation.Keep
 import com.google.gson.annotations.SerializedName
 import retrofit2.http.GET
 import retrofit2.http.Path
@@ -188,6 +189,7 @@ interface TmdbApi {
 
 // Response data classes
 
+@Keep
 data class TmdbListResponse(
     val page: Int = 1,
     val results: List<TmdbMediaItem> = emptyList(),
@@ -195,6 +197,7 @@ data class TmdbListResponse(
     @SerializedName("total_results") val totalResults: Int = 0
 )
 
+@Keep
 data class TmdbMediaItem(
     val id: Int = 0,
     val title: String? = null,
@@ -216,6 +219,7 @@ data class TmdbMediaItem(
     val character: String? = null
 )
 
+@Keep
 data class TmdbMovieDetails(
     val id: Int = 0,
     val title: String = "",
@@ -234,6 +238,7 @@ data class TmdbMovieDetails(
     @SerializedName("belongs_to_collection") val belongsToCollection: TmdbCollectionRef? = null
 )
 
+@Keep
 data class TmdbTvDetails(
     val id: Int = 0,
     val name: String = "",
@@ -252,6 +257,7 @@ data class TmdbTvDetails(
     val seasons: List<TmdbTvSeason> = emptyList()
 )
 
+@Keep
 data class TmdbSeasonDetails(
     val id: Int = 0,
     @SerializedName("season_number") val seasonNumber: Int = 1,
@@ -261,6 +267,7 @@ data class TmdbSeasonDetails(
     val episodes: List<TmdbEpisode> = emptyList()
 )
 
+@Keep
 data class TmdbEpisode(
     val id: Int = 0,
     @SerializedName("episode_number") val episodeNumber: Int = 1,
@@ -273,26 +280,27 @@ data class TmdbEpisode(
     @SerializedName("air_date") val airDate: String? = null
 )
 
-data class TmdbGenre(val id: Int = 0, val name: String = "")
-data class TmdbCreditsResponse(val id: Int = 0, val cast: List<TmdbCastMember> = emptyList())
-data class TmdbCastMember(val id: Int = 0, val name: String = "", val character: String? = null, @SerializedName("profile_path") val profilePath: String? = null, val order: Int = 0)
-data class TmdbImagesResponse(val id: Int = 0, val logos: List<TmdbImage> = emptyList(), val backdrops: List<TmdbImage> = emptyList())
-data class TmdbImage(@SerializedName("file_path") val filePath: String? = null, @SerializedName("iso_639_1") val iso6391: String? = null, val width: Int = 0, val height: Int = 0, @SerializedName("vote_average") val voteAverage: Float = 0f, @SerializedName("vote_count") val voteCount: Int = 0)
-data class TmdbVideosResponse(val id: Int = 0, val results: List<TmdbVideo> = emptyList())
-data class TmdbVideo(val id: String = "", val key: String = "", val name: String = "", val site: String = "", val type: String = "", val official: Boolean = false)
-data class TmdbExternalIds(@SerializedName("imdb_id") val imdbId: String? = null, @SerializedName("tvdb_id") val tvdbId: Int? = null)
-data class TmdbWatchProvidersResponse(val id: Int = 0, val results: Map<String, TmdbWatchProviderRegion> = emptyMap())
-data class TmdbWatchProviderRegion(val link: String? = null, val flatrate: List<TmdbWatchProvider> = emptyList(), val free: List<TmdbWatchProvider> = emptyList(), val ads: List<TmdbWatchProvider> = emptyList(), val rent: List<TmdbWatchProvider> = emptyList(), val buy: List<TmdbWatchProvider> = emptyList())
-data class TmdbWatchProvider(@SerializedName("provider_id") val providerId: Int = 0, @SerializedName("provider_name") val providerName: String = "", @SerializedName("logo_path") val logoPath: String? = null, @SerializedName("display_priority") val displayPriority: Int = 0)
-data class TmdbPersonDetails(val id: Int = 0, val name: String = "", val biography: String? = null, @SerializedName("place_of_birth") val placeOfBirth: String? = null, val birthday: String? = null, @SerializedName("profile_path") val profilePath: String? = null, @SerializedName("combined_credits") val combinedCredits: TmdbCombinedCredits? = null)
-data class TmdbCombinedCredits(val cast: List<TmdbMediaItem> = emptyList())
-data class TmdbReviewsResponse(val id: Int = 0, val page: Int = 1, val results: List<TmdbReview> = emptyList(), @SerializedName("total_pages") val totalPages: Int = 1, @SerializedName("total_results") val totalResults: Int = 0)
-data class TmdbReview(val id: String = "", val author: String = "", @SerializedName("author_details") val authorDetails: TmdbAuthorDetails? = null, val content: String = "", @SerializedName("created_at") val createdAt: String = "", @SerializedName("updated_at") val updatedAt: String = "", val url: String = "")
-data class TmdbAuthorDetails(val name: String = "", val username: String = "", @SerializedName("avatar_path") val avatarPath: String? = null, val rating: Float? = null)
-data class TmdbFindResponse(@SerializedName("movie_results") val movieResults: List<TmdbFindItem> = emptyList(), @SerializedName("tv_results") val tvResults: List<TmdbFindItem> = emptyList())
-data class TmdbFindItem(val id: Int = 0, val popularity: Float = 0f)
+@Keep data class TmdbGenre(val id: Int = 0, val name: String = "")
+@Keep data class TmdbCreditsResponse(val id: Int = 0, val cast: List<TmdbCastMember> = emptyList())
+@Keep data class TmdbCastMember(val id: Int = 0, val name: String = "", val character: String? = null, @SerializedName("profile_path") val profilePath: String? = null, val order: Int = 0)
+@Keep data class TmdbImagesResponse(val id: Int = 0, val logos: List<TmdbImage> = emptyList(), val backdrops: List<TmdbImage> = emptyList())
+@Keep data class TmdbImage(@SerializedName("file_path") val filePath: String? = null, @SerializedName("iso_639_1") val iso6391: String? = null, val width: Int = 0, val height: Int = 0, @SerializedName("vote_average") val voteAverage: Float = 0f, @SerializedName("vote_count") val voteCount: Int = 0)
+@Keep data class TmdbVideosResponse(val id: Int = 0, val results: List<TmdbVideo> = emptyList())
+@Keep data class TmdbVideo(val id: String = "", val key: String = "", val name: String = "", val site: String = "", val type: String = "", val official: Boolean = false)
+@Keep data class TmdbExternalIds(@SerializedName("imdb_id") val imdbId: String? = null, @SerializedName("tvdb_id") val tvdbId: Int? = null)
+@Keep data class TmdbWatchProvidersResponse(val id: Int = 0, val results: Map<String, TmdbWatchProviderRegion> = emptyMap())
+@Keep data class TmdbWatchProviderRegion(val link: String? = null, val flatrate: List<TmdbWatchProvider> = emptyList(), val free: List<TmdbWatchProvider> = emptyList(), val ads: List<TmdbWatchProvider> = emptyList(), val rent: List<TmdbWatchProvider> = emptyList(), val buy: List<TmdbWatchProvider> = emptyList())
+@Keep data class TmdbWatchProvider(@SerializedName("provider_id") val providerId: Int = 0, @SerializedName("provider_name") val providerName: String = "", @SerializedName("logo_path") val logoPath: String? = null, @SerializedName("display_priority") val displayPriority: Int = 0)
+@Keep data class TmdbPersonDetails(val id: Int = 0, val name: String = "", val biography: String? = null, @SerializedName("place_of_birth") val placeOfBirth: String? = null, val birthday: String? = null, @SerializedName("profile_path") val profilePath: String? = null, @SerializedName("combined_credits") val combinedCredits: TmdbCombinedCredits? = null)
+@Keep data class TmdbCombinedCredits(val cast: List<TmdbMediaItem> = emptyList())
+@Keep data class TmdbReviewsResponse(val id: Int = 0, val page: Int = 1, val results: List<TmdbReview> = emptyList(), @SerializedName("total_pages") val totalPages: Int = 1, @SerializedName("total_results") val totalResults: Int = 0)
+@Keep data class TmdbReview(val id: String = "", val author: String = "", @SerializedName("author_details") val authorDetails: TmdbAuthorDetails? = null, val content: String = "", @SerializedName("created_at") val createdAt: String = "", @SerializedName("updated_at") val updatedAt: String = "", val url: String = "")
+@Keep data class TmdbAuthorDetails(val name: String = "", val username: String = "", @SerializedName("avatar_path") val avatarPath: String? = null, val rating: Float? = null)
+@Keep data class TmdbFindResponse(@SerializedName("movie_results") val movieResults: List<TmdbFindItem> = emptyList(), @SerializedName("tv_results") val tvResults: List<TmdbFindItem> = emptyList())
+@Keep data class TmdbFindItem(val id: Int = 0, val popularity: Float = 0f)
 
 /** Response for /collection/{id} — the `parts` array contains the films in a franchise. */
+@Keep
 data class TmdbCollectionResponse(
     val id: Int = 0,
     val name: String = "",
@@ -302,6 +310,7 @@ data class TmdbCollectionResponse(
     val parts: List<TmdbMediaItem> = emptyList()
 )
 
+@Keep
 data class TmdbTvSeason(
     val id: Int = 0,
     @SerializedName("season_number") val seasonNumber: Int = 1,
@@ -313,6 +322,7 @@ data class TmdbTvSeason(
 )
 
 /** Reference to a TMDB collection (franchise) returned inside movie/TV details. */
+@Keep
 data class TmdbCollectionRef(
     val id: Int = 0,
     val name: String = "",

@@ -30,7 +30,12 @@ class LoginViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             authRepository.authState.collect { authState ->
-                _uiState.update { it.copy(authState = authState) }
+                _uiState.update {
+                    it.copy(
+                        authState = authState,
+                        loginReady = it.loginReady || authState is AuthState.Authenticated
+                    )
+                }
             }
         }
     }

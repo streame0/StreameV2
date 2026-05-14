@@ -61,8 +61,8 @@ class CloudSyncCoordinator @Inject constructor(
         started = true
         Log.i(TAG, "Starting cloud sync coordinator")
         collectorJob = scope.launch {
-            invalidationBus.events.collectLatest { invalidation ->
-                if (!authManager.isAuthenticated) return@collectLatest
+            invalidationBus.events.collect { invalidation ->
+                if (!authManager.isAuthenticated) return@collect
                 isPushDirty = true
                 synchronized(pendingScopes) { pendingScopes.add(invalidation.scope) }
                 scheduleFlush(invalidation)

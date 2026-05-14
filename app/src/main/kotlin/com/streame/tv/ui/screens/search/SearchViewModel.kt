@@ -81,7 +81,7 @@ data class SearchUiState(
     val error: AppException? = null,
     val retryAction: (() -> Unit)? = null,
     // Discover rows - always 5 rows, dynamically built from active filters
-    val discoverCategories: List<Category> = EMPTY_MEDIA_ITEMS as List<Category>,
+    val discoverCategories: List<Category> = emptyList(),
     val discoverLogoUrls: Map<String, String> = EMPTY_LOGO_URLS,
     val isDiscoverLoading: Boolean = false,
     // Filters
@@ -117,14 +117,14 @@ class SearchViewModel @Inject constructor(
 
     private fun loadDiscoverRows() {
         discoverJob?.cancel()
-        val state = _uiState.value
-        _uiState.value = state.copy(isDiscoverLoading = true, error = null)
+        _uiState.value = _uiState.value.copy(isDiscoverLoading = true, error = null)
 
         discoverJob = viewModelScope.launch {
             try {
-                val type = state.selectedType
-                val genre = state.selectedGenre?.id?.toString()
-                val lang = state.selectedCountry?.code
+                val currentState = _uiState.value
+                val type = currentState.selectedType
+                val genre = currentState.selectedGenre?.id?.toString()
+                val lang = currentState.selectedCountry?.code
                 val isAnime = type == DiscoverType.ANIME
 
                 val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
@@ -194,7 +194,7 @@ class SearchViewModel @Inject constructor(
                     }
                 }
             }
-            if (items.isEmpty()) null else Category(id = "${type}_${title}_${genre}_${lang}_$page", title = title, items = items.take(20))
+            if (items.isEmpty()) null else Category(id = "${type}_${title}_${genre ?: "all"}_${lang ?: "all"}_$page", title = title, items = items.take(20))
         } catch (e: Exception) { AppLogger.e("SearchVM", "Failed to build row '$title'", e); null }
     }
 

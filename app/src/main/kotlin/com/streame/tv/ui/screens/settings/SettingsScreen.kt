@@ -10,6 +10,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import com.streame.tv.BuildConfig
+import com.streame.tv.ui.components.TextInputModal
+import com.streame.tv.ui.screens.player.SubtitleAiModel
 import androidx.compose.foundation.background
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -278,6 +280,7 @@ fun SettingsScreen(
     var dnsProviderPickerIndex by remember { mutableIntStateOf(0) }
     var showContentLanguagePicker by remember { mutableStateOf(false) }
     var contentLanguagePickerIndex by remember { mutableIntStateOf(0) }
+    var showAiApiKeyDialog by remember { mutableStateOf(false) }
     var showUiModeWarningDialog by remember { mutableStateOf(false) }
     var nextUiMode by remember { mutableStateOf("") }
     var showQualityFiltersModal by remember { mutableStateOf(false) }
@@ -306,7 +309,7 @@ fun SettingsScreen(
     }
     val sectionMaxIndex: (String) -> Int = { section ->
         when (section) {
-            "general" -> 20 // 21 rows
+            "general" -> 28 // 28 rows (including AI subtitle rows)
             "catalogs" -> uiState.catalogs.size // Add + rows
             "stremio" -> stremioAddons.size // rows + add button
             "torrserver" -> 4 // URL + Auto-detect + Test + Status
@@ -410,14 +413,11 @@ fun SettingsScreen(
     }
     
     // Reset content scroll AND position cache when switching sections.
-    LaunchedEffect(sectionIndex) {
+    LaunchedEffect(sectionIndex, activeZone, sections.size) {
         focusTracker.clear()
         if (scrollState.value != 0) {
             scrollState.scrollTo(0)
         }
-    }
-
-    LaunchedEffect(sectionIndex, activeZone, sections.size) {
         if (isTouchDevice || activeZone != Zone.SECTION) return@LaunchedEffect
         val maxScroll = sectionScrollState.maxValue
         if (maxScroll <= 0) return@LaunchedEffect
@@ -485,6 +485,7 @@ fun SettingsScreen(
         showDnsProviderPicker ||
         showContentLanguagePicker ||
         showUiModeWarningDialog ||
+        showAiApiKeyDialog ||
         uiState.traktCode != null ||
         uiState.showAppUpdateDialog ||
         uiState.showUnknownSourcesDialog ||
@@ -683,12 +684,32 @@ fun SettingsScreen(
                                                 12 -> showQualityFiltersModal = true
                                                 13 -> viewModel.toggleCardLayoutMode()
                                                 14 -> openUiModeWarningDialog()
-                                                15 -> viewModel.setSkipProfileSelection(!uiState.skipProfileSelection)
-                                                16 -> viewModel.cycleClockFormat()
-                                                17 -> viewModel.setShowBudget(!uiState.showBudget)
-                                                18 -> openDnsProviderPicker()
-                                                19 -> viewModel.setShowLoadingStats(!uiState.showLoadingStats)
-                                                20 -> viewModel.cycleVolumeBoost()
+                                                15 -> {
+                                                    val next = when (uiState.themeVariant) {
+                                                        "arctic" -> "oled"
+                                                        "oled" -> "dimmer"
+                                                        else -> "arctic"
+                                                    }
+                                                    viewModel.setThemeVariant(next)
+                                                }
+                                                16 -> {
+                                                    val next = if (uiState.experienceMode == "advanced") "essential" else "advanced"
+                                                    viewModel.setExperienceMode(next)
+                                                }
+                                                17 -> viewModel.setSkipProfileSelection(!uiState.skipProfileSelection)
+                                                18 -> viewModel.cycleClockFormat()
+                                                19 -> viewModel.setShowBudget(!uiState.showBudget)
+                                                20 -> openDnsProviderPicker()
+                                                21 -> viewModel.setShowLoadingStats(!uiState.showLoadingStats)
+                                                22 -> viewModel.cycleVolumeBoost()
+                                                23 -> viewModel.setSubtitleAiEnabled(!uiState.subtitleAiEnabled)
+                                                24 -> {
+                                                    val next = if (uiState.subtitleAiModel == SubtitleAiModel.GROQ_LLAMA_70B.name) SubtitleAiModel.GEMINI_FLASH_25.name else SubtitleAiModel.GROQ_LLAMA_70B.name
+                                                    viewModel.setSubtitleAiModel(next)
+                                                }
+                                                25 -> viewModel.setSubtitleAiAutoSelect(!uiState.subtitleAiAutoSelect)
+                                                26 -> viewModel.setSubtitleRemoveHearingImpaired(!uiState.subtitleRemoveHearingImpaired)
+                                                27 -> showAiApiKeyDialog = true
                                             }
                                         }
                                         "catalogs" -> {
@@ -983,7 +1004,20 @@ fun SettingsScreen(
                             filterSubtitlesByLanguage = uiState.filterSubtitlesByLanguage,
                             onFilterSubtitlesByLanguageToggle = { viewModel.setFilterSubtitlesByLanguage(it) },
                             qualityFilterValue = uiState.qualityFilterPresetLabel,
-                            onQualityFiltersClick = { showQualityFiltersModal = true }
+                            onQualityFiltersClick = { showQualityFiltersModal = true },
+                            subtitleAiEnabled = uiState.subtitleAiEnabled,
+                            onSubtitleAiEnabledToggle = { viewModel.setSubtitleAiEnabled(it) },
+                            subtitleAiModel = uiState.subtitleAiModel,
+                            onSubtitleAiModelClick = {
+                                val next = if (uiState.subtitleAiModel == SubtitleAiModel.GROQ_LLAMA_70B.name) SubtitleAiModel.GEMINI_FLASH_25.name else SubtitleAiModel.GROQ_LLAMA_70B.name
+                                viewModel.setSubtitleAiModel(next)
+                            },
+                            subtitleAiAutoSelect = uiState.subtitleAiAutoSelect,
+                            onSubtitleAiAutoSelectToggle = { viewModel.setSubtitleAiAutoSelect(it) },
+                            subtitleRemoveHearingImpaired = uiState.subtitleRemoveHearingImpaired,
+                            onSubtitleRemoveHearingImpairedToggle = { viewModel.setSubtitleRemoveHearingImpaired(it) },
+                            subtitleAiApiKey = uiState.subtitleAiApiKey,
+                            onSubtitleAiApiKeyClick = { showAiApiKeyDialog = true }
                         )
                         "catalogs" -> CatalogsSettings(
                             catalogs = uiState.catalogs,
@@ -1156,6 +1190,21 @@ fun SettingsScreen(
                 onDismiss = {
                     showCatalogRename = false
                 }
+            )
+        }
+
+        if (showAiApiKeyDialog) {
+            TextInputModal(
+                isVisible = showAiApiKeyDialog,
+                title = "AI Subtitle API Key",
+                hint = "Enter your Groq or Gemini API key",
+                initialValue = uiState.subtitleAiApiKey,
+                isPassword = true,
+                onConfirm = { key ->
+                    viewModel.setSubtitleAiApiKey(key)
+                    showAiApiKeyDialog = false
+                },
+                onCancel = { showAiApiKeyDialog = false }
             )
         }
 
@@ -2178,6 +2227,43 @@ private fun MobileSettingsSubPage(
                         onClick = { viewModel.setFilterSubtitlesByLanguage(!uiState.filterSubtitlesByLanguage) }
                     )
                 }
+                MobileSettingsCategory(title = "AI SUBTITLES") {
+                    MobileSettingsRow(
+                        icon = Icons.Default.Subtitles,
+                        title = stringResource(R.string.ai_subtitle_translation_title),
+                        subtitle = stringResource(R.string.ai_subtitle_translation_desc),
+                        value = if (uiState.subtitleAiEnabled) "On" else "Off",
+                        isFocused = false,
+                        onClick = { viewModel.setSubtitleAiEnabled(!uiState.subtitleAiEnabled) }
+                    )
+                    MobileSettingsRow(
+                        icon = Icons.Default.Subtitles,
+                        title = stringResource(R.string.ai_model_title),
+                        value = if (uiState.subtitleAiModel == SubtitleAiModel.GROQ_LLAMA_70B.name) "Groq" else "Gemini",
+                        isFocused = false,
+                        onClick = {
+                            val next = if (uiState.subtitleAiModel == SubtitleAiModel.GROQ_LLAMA_70B.name) SubtitleAiModel.GEMINI_FLASH_25.name else SubtitleAiModel.GROQ_LLAMA_70B.name
+                            viewModel.setSubtitleAiModel(next)
+                        }
+                    )
+                    MobileSettingsRow(
+                        icon = Icons.Default.Subtitles,
+                        title = stringResource(R.string.ai_auto_select_title),
+                        subtitle = stringResource(R.string.ai_auto_select_desc),
+                        value = if (uiState.subtitleAiAutoSelect) "On" else "Off",
+                        isFocused = false,
+                        onClick = { viewModel.setSubtitleAiAutoSelect(!uiState.subtitleAiAutoSelect) }
+                    )
+                    MobileSettingsRow(
+                        icon = Icons.Default.Subtitles,
+                        title = stringResource(R.string.ai_remove_hi_title),
+                        subtitle = stringResource(R.string.ai_remove_hi_desc),
+                        value = if (uiState.subtitleRemoveHearingImpaired) "On" else "Off",
+                        isFocused = false,
+                        showDivider = false,
+                        onClick = { viewModel.setSubtitleRemoveHearingImpaired(!uiState.subtitleRemoveHearingImpaired) }
+                    )
+                }
                 MobileSettingsCategory(title = "AUDIO") {
                     MobileSettingsRow(
                         icon = Icons.Default.VolumeUp,
@@ -2747,7 +2833,17 @@ private fun GeneralSettings(
     onFilterSubtitlesByLanguageToggle: (Boolean) -> Unit = {},
     onTrailerAutoPlayToggle: (Boolean) -> Unit = {},
     qualityFilterValue: String = "OFF",
-    onQualityFiltersClick: () -> Unit = {}
+    onQualityFiltersClick: () -> Unit = {},
+    subtitleAiEnabled: Boolean = false,
+    onSubtitleAiEnabledToggle: (Boolean) -> Unit = {},
+    subtitleAiApiKey: String = "",
+    onSubtitleAiApiKeyClick: () -> Unit = {},
+    subtitleAiModel: String = "GROQ_LLAMA_70B",
+    onSubtitleAiModelClick: () -> Unit = {},
+    subtitleAiAutoSelect: Boolean = false,
+    onSubtitleAiAutoSelectToggle: (Boolean) -> Unit = {},
+    subtitleRemoveHearingImpaired: Boolean = true,
+    onSubtitleRemoveHearingImpairedToggle: (Boolean) -> Unit = {}
 ) {
     Column {
         // â”€â”€ Language & Subtitles â”€â”€
@@ -3038,6 +3134,63 @@ private fun GeneralSettings(
             modifier = Modifier.settingsFocusSlot(22)
         )
         } // end advanced-only (Network & Audio)
+
+        // ── AI Subtitles ──
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = stringResource(R.string.ai_subtitles_section),
+            style = StreameTypography.caption.copy(fontSize = 11.sp, letterSpacing = 0.8.sp),
+            color = TextSecondary.copy(alpha = 0.5f),
+            modifier = Modifier.padding(start = 4.dp, bottom = 12.dp)
+        )
+
+        SettingsToggleRow(
+            title = stringResource(R.string.ai_subtitle_translation_title),
+            subtitle = stringResource(R.string.ai_subtitle_translation_desc),
+            isEnabled = subtitleAiEnabled,
+            isFocused = focusedIndex == 23,
+            onToggle = onSubtitleAiEnabledToggle,
+            modifier = Modifier.settingsFocusSlot(23)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsRow(
+            icon = Icons.Default.Subtitles,
+            title = stringResource(R.string.ai_model_title),
+            subtitle = stringResource(R.string.ai_model_desc),
+            value = if (subtitleAiModel == SubtitleAiModel.GROQ_LLAMA_70B.name) "Groq \u2014 Llama 3.3 70B" else "Google \u2014 Gemini 2.5 Flash",
+            isFocused = focusedIndex == 24,
+            onClick = onSubtitleAiModelClick,
+            modifier = Modifier.settingsFocusSlot(24)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsToggleRow(
+            title = stringResource(R.string.ai_auto_select_title),
+            subtitle = stringResource(R.string.ai_auto_select_desc),
+            isEnabled = subtitleAiAutoSelect,
+            isFocused = focusedIndex == 25,
+            onToggle = onSubtitleAiAutoSelectToggle,
+            modifier = Modifier.settingsFocusSlot(25)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsToggleRow(
+            title = stringResource(R.string.ai_remove_hi_title),
+            subtitle = stringResource(R.string.ai_remove_hi_desc),
+            isEnabled = subtitleRemoveHearingImpaired,
+            isFocused = focusedIndex == 26,
+            onToggle = onSubtitleRemoveHearingImpairedToggle,
+            modifier = Modifier.settingsFocusSlot(26)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsRow(
+            icon = Icons.Default.Settings,
+            title = stringResource(R.string.ai_api_key_title),
+            subtitle = stringResource(R.string.ai_api_key_desc),
+            value = if (subtitleAiApiKey.isNotBlank()) "****${subtitleAiApiKey.takeLast(4)}" else stringResource(R.string.ai_key_not_set),
+            isFocused = focusedIndex == 27,
+            onClick = onSubtitleAiApiKeyClick,
+            modifier = Modifier.settingsFocusSlot(27)
+        )
+        Spacer(modifier = Modifier.height(400.dp))
     }
 }
 
@@ -6108,7 +6261,7 @@ private fun InputModal(
     val modalFocusRequester = remember { FocusRequester() }
     val formScrollState = rememberScrollState()
 
-    val editTextRefs = remember { MutableList<EditText?>(fields.size) { null } }
+    val editTextRefs = remember(fields.size) { MutableList<EditText?>(fields.size) { null } }
 
     fun anyEditTextFocused(): Boolean = editTextRefs.any { it?.hasFocus() == true }
 

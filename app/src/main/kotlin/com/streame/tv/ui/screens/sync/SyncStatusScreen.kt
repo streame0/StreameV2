@@ -1,5 +1,6 @@
 package com.streame.tv.ui.screens.sync
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -89,7 +90,7 @@ fun SyncStatusScreen(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "Back",
                 tint = TextPrimary,
-                modifier = Modifier.padding(end = 16.dp)
+                modifier = Modifier.padding(end = 16.dp).clickable { onBack() }
             )
             Text(
                 text = "Cloud Sync Status",
@@ -159,7 +160,7 @@ fun SyncStatusScreen(
                     text = "Force Full Sync",
                     style = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Medium),
                     color = Pink,
-                    modifier = Modifier.Companion // clickable handled by focus
+                    modifier = Modifier.clickable { viewModel.forceFullSync() }
                 )
             }
             Text(

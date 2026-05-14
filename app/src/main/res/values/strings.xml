@@ -191,4 +191,18 @@
     <string name="set_profile_pin">Set Profile PIN</string>
     <string name="done">Done</string>
     <string name="connect_to_cloud">Connect to Streame Cloud</string>
+
+    <!-- AI Subtitles -->
+    <string name="ai_subtitles_section">AI SUBTITLES</string>
+    <string name="ai_subtitle_translation_title">AI Subtitle Translation</string>
+    <string name="ai_subtitle_translation_desc">Translate subtitles using AI (Groq/Gemini)</string>
+    <string name="ai_model_title">AI Model</string>
+    <string name="ai_model_desc">Select the AI model for subtitle translation</string>
+    <string name="ai_auto_select_title">Auto-select AI Subtitles</string>
+    <string name="ai_auto_select_desc">Automatically use AI translation when no subtitle exists in your language</string>
+    <string name="ai_remove_hi_title">Remove Hearing Impaired</string>
+    <string name="ai_remove_hi_desc">Strip [sound] descriptions from subtitles before translation</string>
+    <string name="ai_api_key_title">API Key</string>
+    <string name="ai_api_key_desc">Enter your Groq or Gemini API key for subtitle translation</string>
+    <string name="ai_key_not_set">Not set</string>
 </resources>

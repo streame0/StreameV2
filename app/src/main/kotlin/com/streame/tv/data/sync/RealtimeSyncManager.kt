@@ -60,6 +60,7 @@ class RealtimeSyncManager @Inject constructor(
 
     private var periodicSyncJob: Job? = null
     private var channelJob: Job? = null
+    @Volatile
     private var activeChannel: RealtimeChannel? = null
 
     private val _syncStatusFlow = MutableStateFlow(CloudSyncStatus.NOT_SIGNED_IN)

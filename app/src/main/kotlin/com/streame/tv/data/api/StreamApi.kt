@@ -1,5 +1,6 @@
 package com.streame.tv.data.api
 
+import androidx.annotation.Keep
 import com.google.gson.annotations.SerializedName
 import retrofit2.http.GET
 import retrofit2.http.Url
@@ -108,6 +109,7 @@ interface StreamApi {
  * Stremio addon manifest response - matches Stremio protocol
  * https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/manifest.md
  */
+@Keep
 data class StremioManifestResponse(
     val id: String,
     val name: String,
@@ -122,12 +124,14 @@ data class StremioManifestResponse(
     val behaviorHints: StremioAddonBehaviorHints? = null
 )
 
+@Keep
 data class StremioResourceDescriptor(
     val name: String,
     val types: List<String>? = null,
     val idPrefixes: List<String>? = null
 )
 
+@Keep
 data class StremioCatalog(
     val type: String,
     val id: String,
@@ -136,12 +140,14 @@ data class StremioCatalog(
     val extra: List<StremioCatalogExtra>? = null
 )
 
+@Keep
 data class StremioCatalogExtra(
     val name: String,
     val isRequired: Boolean? = null,
     val options: List<String>? = null
 )
 
+@Keep
 data class StremioAddonBehaviorHints(
     val adult: Boolean? = null,
     val p2p: Boolean? = null,
@@ -151,15 +157,18 @@ data class StremioAddonBehaviorHints(
 
 // ========== Stremio Stream Models ==========
 
+@Keep
 data class StremioStreamResponse(
     val streams: List<StremioStream>? = null
 )
 
+@Keep
 data class StremioCatalogResponse(
     val metas: List<StremioMetaPreview>? = null,
     val items: List<StremioMetaPreview>? = null
 )
 
+@Keep
 data class StremioMetaPreview(
     val id: String? = null,
     val type: String? = null,
@@ -169,10 +178,12 @@ data class StremioMetaPreview(
     @SerializedName("moviedb_id") val moviedbId: String? = null
 )
 
+@Keep
 data class StremioMetaResponse(
     val meta: StremioMetaPreview? = null
 )
 
+@Keep
 data class StremioStream(
     val name: String? = null,
     val title: String? = null,
@@ -331,6 +342,7 @@ data class StremioStream(
 /**
  * Stream behavior hints - enhanced to match full Stremio protocol
  */
+@Keep
 data class StreamBehaviorHints(
     val notWebReady: Boolean? = null,       // Stream needs transcoding
     val cached: Boolean? = null,             // Already cached in debrid
@@ -343,11 +355,13 @@ data class StreamBehaviorHints(
     val filename: String? = null
 )
 
+@Keep
 data class StremioProxyHeaders(
     val request: Map<String, String>? = null,
     val response: Map<String, String>? = null
 )
 
+@Keep
 data class StremioSubtitle(
     val id: String? = null,
     val url: String? = null,
@@ -355,37 +369,43 @@ data class StremioSubtitle(
     val label: String? = null
 )
 
+@Keep
 data class StremioSubtitleResponse(
     val subtitles: List<StremioSubtitle>? = null
 )
 
 // ========== Kitsu API Models ==========
 
+@Keep
 data class KitsuSearchResponse(
     val data: List<KitsuAnime>?
 )
 
+@Keep
 data class KitsuAnime(
     val id: String,
     val type: String?,
     val attributes: KitsuAnimeAttributes?
 )
 
+@Keep
 data class KitsuAnimeAttributes(
-    val canonicalTitle: String?,
+    @SerializedName("canonicalTitle") val canonicalTitle: String?,
     val titles: Map<String, String>?,
     val slug: String?,
-    val episodeCount: Int?,
+    @SerializedName("episodeCount") val episodeCount: Int?,
     val status: String?
 )
 
 // ========== Kitsu Mapping API Models ==========
 
+@Keep
 data class KitsuMappingResponse(
     val data: List<KitsuMapping>?,
     val included: List<KitsuIncludedItem>?
 )
 
+@Keep
 data class KitsuMapping(
     val id: String,
     val type: String?,
@@ -393,24 +413,29 @@ data class KitsuMapping(
     val relationships: KitsuMappingRelationships?
 )
 
+@Keep
 data class KitsuMappingAttributes(
-    val externalSite: String?,
-    val externalId: String?
+    @SerializedName("externalSite") val externalSite: String?,
+    @SerializedName("externalId") val externalId: String?
 )
 
+@Keep
 data class KitsuMappingRelationships(
     val item: KitsuRelationshipData?
 )
 
+@Keep
 data class KitsuRelationshipData(
     val data: KitsuRelationshipItem?
 )
 
+@Keep
 data class KitsuRelationshipItem(
     val id: String?,
     val type: String?
 )
 
+@Keep
 data class KitsuIncludedItem(
     val id: String,
     val type: String?,
@@ -419,10 +444,12 @@ data class KitsuIncludedItem(
 
 // ========== Kitsu Anime Detail API Models ==========
 
+@Keep
 data class KitsuAnimeDetailResponse(
     val data: KitsuAnimeDetail?
 )
 
+@Keep
 data class KitsuAnimeDetail(
     val id: String,
     val type: String?,
@@ -431,11 +458,13 @@ data class KitsuAnimeDetail(
 
 // ========== Kitsu Media Relationships API Models ==========
 
+@Keep
 data class KitsuMediaRelationshipsResponse(
     val data: List<KitsuMediaRelationship>?,
     val included: List<KitsuIncludedAnime>?
 )
 
+@Keep
 data class KitsuMediaRelationship(
     val id: String,
     val type: String?,
@@ -443,14 +472,17 @@ data class KitsuMediaRelationship(
     val relationships: KitsuMediaRelationshipRels?
 )
 
+@Keep
 data class KitsuMediaRelationshipAttributes(
     val role: String?  // "sequel", "prequel", "side_story", "alternative_setting", etc.
 )
 
+@Keep
 data class KitsuMediaRelationshipRels(
     val destination: KitsuRelationshipData?
 )
 
+@Keep
 data class KitsuIncludedAnime(
     val id: String,
     val type: String?,
@@ -463,6 +495,7 @@ data class KitsuIncludedAnime(
  * ARM API mapping entry - maps between anime database IDs
  * Each entry represents one season/entry in different databases
  */
+@Keep
 data class ArmMappingEntry(
     val kitsu: Int? = null,
     val anilist: Int? = null,

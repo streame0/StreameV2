@@ -221,7 +221,6 @@ class WatchlistViewModel @Inject constructor(
                     fetchLogos(orderedTraktItems)
 
                     watchlistRepository.syncFromTraktOrder(orderedTraktItems)
-                    _uiState.value = WatchlistUiState(isLoading = false, items = orderedTraktItems)
                     } else if (rawCount == 0) {
                     val cachedItems = (watchlistRepository.getCachedItems().ifEmpty {
                         watchlistRepository.getWatchlistItems()

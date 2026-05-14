@@ -234,7 +234,7 @@ class ProfileViewModel @Inject constructor(
                 newProfileName = profile.name,
                 selectedColorIndex = ProfileColors.colors.indexOf(profile.avatarColor).takeIf { it >= 0 } ?: 0,
                 selectedAvatarId = profile.avatarId,
-                isKidsProfile = false
+                isKidsProfile = profile.isKidsProfile
             )
         }
     }
@@ -254,7 +254,7 @@ class ProfileViewModel @Inject constructor(
                     name = state.newProfileName.trim(),
                     avatarColor = ProfileColors.getByIndex(state.selectedColorIndex),
                     avatarId = state.selectedAvatarId,
-                    isKidsProfile = false
+                    isKidsProfile = editing.isKidsProfile
                 )
             )
             _uiState.value = _uiState.value.copy(editingProfile = null)

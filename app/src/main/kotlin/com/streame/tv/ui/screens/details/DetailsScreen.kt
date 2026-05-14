@@ -251,6 +251,7 @@ fun DetailsScreen(
         similarIndex = 0
         collectionIndex = 0
         isSidebarFocused = false
+        suppressSelectUntilMs = SystemClock.elapsedRealtime() + 150L
         viewModel.loadDetails(mediaType, mediaId, initialSeason, initialEpisode)
     }
 
@@ -368,8 +369,8 @@ fun DetailsScreen(
                     event.type == KeyEventType.KeyDown &&
                     isStreameDpadNavigationKey(event.key) &&
                     dpadRepeatGate.shouldSkip(
-                        keyCode = event.nativeKeyEvent.keyCode,
-                        repeatCount = event.nativeKeyEvent.repeatCount,
+                        keyCode = event.nativeKeyEvent?.keyCode ?: 0,
+                        repeatCount = event.nativeKeyEvent?.repeatCount ?: 0,
                         nowMs = SystemClock.elapsedRealtime()
                     )
                 ) {
