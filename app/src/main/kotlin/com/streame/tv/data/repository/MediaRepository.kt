@@ -7,6 +7,7 @@ import com.streame.tv.data.api.TmdbEpisode
 import com.streame.tv.data.api.TmdbImage
 import com.streame.tv.data.api.TmdbListResponse
 import com.streame.tv.data.api.TmdbMediaItem
+import com.streame.tv.data.api.TmdbCollectionRef
 import com.streame.tv.data.api.TmdbMovieDetails
 import com.streame.tv.data.api.TmdbPersonDetails
 import com.streame.tv.data.api.TmdbSeasonDetails
@@ -2427,6 +2428,31 @@ class MediaRepository @Inject constructor(
             detailsCache[cacheKey] = CacheEntry(item, System.currentTimeMillis())
             item
         }
+    }
+
+    /**
+     * Get the TMDB collection (franchise) reference for a movie.
+     * Calls /movie/{id} directly to access the `belongs_to_collection` field,
+     * which is discarded by getMovieDetails() → toMediaItem().
+     */
+    suspend fun getMovieCollectionRef(movieId: Int): TmdbCollectionRef? {
+        return runCatching {
+            tmdbApi.getMovieDetails(movieId, language = contentLanguage).belongsToCollection
+        }.getOrNull()
+    }
+
+    /**
+     * Fetch all movies in a TMDB collection (franchise).
+     * Calls TMDB /collection/{id} and maps the parts array to Movie MediaItems.
+     * Used by the Details page to show franchise rows (e.g. "Cars Collection").
+     */
+    suspend fun getTmdbCollectionItems(collectionId: Int): List<MediaItem> {
+        val response = runCatching {
+            tmdbApi.getTmdbCollection(collectionId, language = contentLanguage)
+        }.getOrNull() ?: return emptyList()
+        return response.parts
+            .sortedBy { it.releaseDate.orEmpty() }
+            .map { it.toMediaItem(MediaType.MOVIE) }
     }
 
     /**

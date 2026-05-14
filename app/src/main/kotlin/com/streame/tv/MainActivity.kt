@@ -64,6 +64,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import android.content.pm.ActivityInfo
 import com.streame.tv.util.DeviceType
 import com.streame.tv.util.DEVICE_MODE_OVERRIDE_KEY
+import com.streame.tv.util.FOCUS_BORDER_COLOR_KEY
 import com.streame.tv.util.SKIP_PROFILE_SELECTION_KEY
 import com.streame.tv.util.LocalDeviceType
 import com.streame.tv.util.LocalHasTouchScreen
@@ -292,6 +293,9 @@ class MainActivity : ComponentActivity() {
             val themeVariant = remember(themeVariantKey) {
                 ThemeVariant.entries.find { it.key == themeVariantKey } ?: ThemeVariant.ARCTIC
             }
+            val focusBorderColorName by remember {
+                this@MainActivity.settingsDataStore.data.map { it[FOCUS_BORDER_COLOR_KEY] }
+            }.collectAsStateWithLifecycle(initialValue = null)
             val deviceType = when (deviceModeOverride) {
                 "tv" -> DeviceType.TV
                 "tablet" -> DeviceType.TABLET
@@ -328,7 +332,7 @@ class MainActivity : ComponentActivity() {
                     if (isRtl) androidx.compose.ui.unit.LayoutDirection.Rtl
                     else androidx.compose.ui.unit.LayoutDirection.Ltr
             ) {
-                StreameTvTheme(variant = themeVariant) {
+                StreameTvTheme(variant = themeVariant, focusBorderColorName = focusBorderColorName) {
                     val startupState by startupViewModel.state.collectAsStateWithLifecycle()
                     StreameApp(
                         authRepository = authRepository.get(),

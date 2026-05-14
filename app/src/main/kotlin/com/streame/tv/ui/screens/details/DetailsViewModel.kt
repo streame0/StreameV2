@@ -87,7 +87,12 @@ data class DetailsUiState(
     // Last-played source info for same-source resume
     val lastAddonId: String? = null,
     val lastSourceName: String? = null,
-    val lastBingeGroup: String? = null
+    val lastBingeGroup: String? = null,
+    // TMDB collection (franchise) info — populated for movies that belong to a collection
+    val collectionId: Int? = null,
+    val collectionName: String? = null,
+    val collectionItems: List<MediaItem> = emptyList(),
+    val collectionPosterPath: String? = null
 )
 
 data class StreamingServiceUi(
@@ -465,6 +470,32 @@ class DetailsViewModel @Inject constructor(
                                 similar = similar,
                                 similarLogoUrls = logos
                             )
+                        }
+                    }
+                }
+
+                // TMDB collection (franchise) — only for movies
+                if (mediaType == MediaType.MOVIE) {
+                    launch {
+                        delay(340L)
+                        val collectionRef = runCatching {
+                            mediaRepository.getMovieCollectionRef(mediaId)
+                        }.getOrNull()
+                        if (collectionRef != null) {
+                            updateState { state ->
+                                state.copy(
+                                    collectionId = collectionRef.id,
+                                    collectionName = collectionRef.name,
+                                    collectionPosterPath = collectionRef.posterPath
+                                )
+                            }
+                            // Fetch collection items in background
+                            val items = runCatching {
+                                mediaRepository.getTmdbCollectionItems(collectionRef.id)
+                            }.getOrNull() ?: emptyList()
+                            if (isCurrentRequest() && _uiState.value.collectionId == collectionRef.id) {
+                                updateState { state -> state.copy(collectionItems = items) }
+                            }
                         }
                     }
                 }

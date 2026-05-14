@@ -203,6 +203,7 @@ fun DetailsScreen(
     var castIndex by remember { mutableIntStateOf(0) }
     var reviewIndex by remember { mutableIntStateOf(0) }
     var similarIndex by remember { mutableIntStateOf(0) }
+    var collectionIndex by remember { mutableIntStateOf(0) }
     var suppressSelectUntilMs by remember { mutableLongStateOf(0L) }
     
     // Sidebar state
@@ -248,6 +249,7 @@ fun DetailsScreen(
         castIndex = 0
         reviewIndex = 0
         similarIndex = 0
+        collectionIndex = 0
         isSidebarFocused = false
         viewModel.loadDetails(mediaType, mediaId, initialSeason, initialEpisode)
     }
@@ -267,6 +269,9 @@ fun DetailsScreen(
         }
         if (similarIndex >= uiState.similar.size) {
             similarIndex = (uiState.similar.size - 1).coerceAtLeast(0)
+        }
+        if (collectionIndex >= uiState.collectionItems.size) {
+            collectionIndex = (uiState.collectionItems.size - 1).coerceAtLeast(0)
         }
     }
 
@@ -397,15 +402,16 @@ fun DetailsScreen(
                                     FocusSection.SEASONS -> seasonIndex == 0
                                     FocusSection.CAST -> castIndex == 0
                                     FocusSection.REVIEWS -> reviewIndex == 0
+                                    FocusSection.COLLECTION -> collectionIndex == 0
                                     FocusSection.SIMILAR -> similarIndex == 0
                                 }
                                 if (atLeftmost) {
                                     true
                                 } else {
                                     handleLeft(
-                                        focusedSection, buttonIndex, episodeIndex, seasonIndex, castIndex, reviewIndex, similarIndex,
+                                        focusedSection, buttonIndex, episodeIndex, seasonIndex, castIndex, reviewIndex, similarIndex, collectionIndex,
                                         { buttonIndex = it }, { episodeIndex = it }, { seasonIndex = it },
-                                        { castIndex = it }, { reviewIndex = it }, { similarIndex = it }
+                                        { castIndex = it }, { reviewIndex = it }, { similarIndex = it }, { collectionIndex = it }
                                     )
                                 }
                             }
@@ -418,9 +424,9 @@ fun DetailsScreen(
                                 true
                             } else {
                                 handleRight(
-                                    focusedSection, buttonIndex, episodeIndex, seasonIndex, castIndex, reviewIndex, similarIndex,
+                                    focusedSection, buttonIndex, episodeIndex, seasonIndex, castIndex, reviewIndex, similarIndex, collectionIndex,
                                     uiState, { buttonIndex = it }, { episodeIndex = it }, { seasonIndex = it },
-                                    { castIndex = it }, { reviewIndex = it }, { similarIndex = it }
+                                    { castIndex = it }, { reviewIndex = it }, { similarIndex = it }, { collectionIndex = it }
                                 )
                             }
                         }
@@ -433,6 +439,7 @@ fun DetailsScreen(
                                 val hasEpisodes = uiState.episodes.isNotEmpty()
                                 val hasCast = uiState.cast.isNotEmpty()
                                 val hasReviews = uiState.reviews.isNotEmpty()
+                                val hasCollection = uiState.collectionItems.isNotEmpty()
                                 focusedSection = when (focusedSection) {
                                     FocusSection.BUTTONS -> {
                                         isSidebarFocused = true
@@ -452,7 +459,8 @@ fun DetailsScreen(
                                         } else FocusSection.BUTTONS
                                     }
                                     FocusSection.REVIEWS -> if (hasCast) FocusSection.CAST else FocusSection.BUTTONS
-                                    FocusSection.SIMILAR -> if (hasReviews) FocusSection.REVIEWS else if (hasCast) FocusSection.CAST else FocusSection.BUTTONS
+                                    FocusSection.COLLECTION -> if (hasReviews) FocusSection.REVIEWS else if (hasCast) FocusSection.CAST else FocusSection.BUTTONS
+                                    FocusSection.SIMILAR -> if (hasCollection) FocusSection.COLLECTION else if (hasReviews) FocusSection.REVIEWS else if (hasCast) FocusSection.CAST else FocusSection.BUTTONS
                                 }
                                 true
                             }
@@ -469,12 +477,14 @@ fun DetailsScreen(
                                 val hasCast = uiState.cast.isNotEmpty()
                                 val hasReviews = uiState.reviews.isNotEmpty()
                                 val hasSimilar = uiState.similar.isNotEmpty()
+                                val hasCollection = uiState.collectionItems.isNotEmpty()
                                 focusedSection = when (focusedSection) {
                                     FocusSection.BUTTONS -> {
                                         if (isTV && hasSeasons) FocusSection.SEASONS
                                         else if (isTV && hasEpisodes) FocusSection.EPISODES
                                         else if (hasCast) FocusSection.CAST
                                         else if (hasReviews) FocusSection.REVIEWS
+                                        else if (hasCollection) FocusSection.COLLECTION
                                         else if (hasSimilar) FocusSection.SIMILAR
                                         else FocusSection.BUTTONS
                                     }
@@ -482,22 +492,30 @@ fun DetailsScreen(
                                         if (hasEpisodes) FocusSection.EPISODES
                                         else if (hasCast) FocusSection.CAST
                                         else if (hasReviews) FocusSection.REVIEWS
+                                        else if (hasCollection) FocusSection.COLLECTION
                                         else if (hasSimilar) FocusSection.SIMILAR
                                         else FocusSection.SEASONS
                                     }
                                     FocusSection.EPISODES -> {
                                         if (hasCast) FocusSection.CAST
                                         else if (hasReviews) FocusSection.REVIEWS
+                                        else if (hasCollection) FocusSection.COLLECTION
                                         else if (hasSimilar) FocusSection.SIMILAR
                                         else FocusSection.EPISODES
                                     }
                                     FocusSection.CAST -> {
                                         if (hasReviews) FocusSection.REVIEWS
+                                        else if (hasCollection) FocusSection.COLLECTION
                                         else if (hasSimilar) FocusSection.SIMILAR
                                         else FocusSection.CAST
                                     }
                                     FocusSection.REVIEWS -> {
-                                        if (hasSimilar) FocusSection.SIMILAR else FocusSection.REVIEWS
+                                        if (hasCollection) FocusSection.COLLECTION
+                                        else if (hasSimilar) FocusSection.SIMILAR
+                                        else FocusSection.REVIEWS
+                                    }
+                                    FocusSection.COLLECTION -> {
+                                        if (hasSimilar) FocusSection.SIMILAR else FocusSection.COLLECTION
                                     }
                                     FocusSection.SIMILAR -> FocusSection.SIMILAR  // Stay on similar (bottom)
                                 }
@@ -610,6 +628,12 @@ fun DetailsScreen(
                                 FocusSection.REVIEWS -> {
                                     // Reviews don't have an action on Enter, just focus
                                 }
+                                FocusSection.COLLECTION -> {
+                                    val collectionItem = uiState.collectionItems.getOrNull(collectionIndex)
+                                    if (collectionItem != null) {
+                                        onNavigateToDetails(collectionItem.mediaType, collectionItem.id)
+                                    }
+                                }
                                 FocusSection.SIMILAR -> {
                                     val similar = uiState.similar.getOrNull(similarIndex)
                                     if (similar != null) {
@@ -674,6 +698,8 @@ fun DetailsScreen(
                     reviews = uiState.reviews,
                     similar = uiState.similar,
                     similarLogoUrls = uiState.similarLogoUrls,
+                    collectionItems = uiState.collectionItems,
+                    collectionName = uiState.collectionName,
                     focusedSection = focusedSection,
                     buttonIndex = buttonIndex,
                     episodeIndex = episodeIndex,
@@ -681,6 +707,7 @@ fun DetailsScreen(
                     castIndex = castIndex,
                     reviewIndex = reviewIndex,
                     similarIndex = similarIndex,
+                    collectionIndex = collectionIndex,
                     isInWatchlist = uiState.isInWatchlist,
                     genres = uiState.genres,
                     budget = uiState.budget,
@@ -744,6 +771,10 @@ fun DetailsScreen(
                             }
                             3 -> viewModel.toggleWatched(episodeIndex)
                             4 -> viewModel.toggleWatchlist()
+                            5 -> { // View Collection — scroll to and focus the collection row
+                                collectionIndex = 0
+                                focusedSection = FocusSection.COLLECTION
+                            }
                         }
                     },
                     onSeasonClick = { idx ->
@@ -774,6 +805,12 @@ fun DetailsScreen(
                         val sim = uiState.similar.getOrNull(idx)
                         if (sim != null) {
                             onNavigateToDetails(sim.mediaType, sim.id)
+                        }
+                    },
+                    onCollectionClick = { idx ->
+                        val col = uiState.collectionItems.getOrNull(idx)
+                        if (col != null) {
+                            onNavigateToDetails(col.mediaType, col.id)
                         }
                     }
                 )
@@ -938,7 +975,7 @@ fun DetailsScreen(
 }
 
 private enum class FocusSection {
-    BUTTONS, EPISODES, SEASONS, CAST, REVIEWS, SIMILAR
+    BUTTONS, EPISODES, SEASONS, CAST, REVIEWS, COLLECTION, SIMILAR
 }
 
 private data class PendingAutoPlayRequest(
@@ -1004,9 +1041,9 @@ private fun isPendingDebridStream(stream: com.streame.tv.data.model.StreamSource
 
 private fun handleLeft(
     section: FocusSection,
-    buttonIdx: Int, episodeIdx: Int, seasonIdx: Int, castIdx: Int, reviewIdx: Int, similarIdx: Int,
+    buttonIdx: Int, episodeIdx: Int, seasonIdx: Int, castIdx: Int, reviewIdx: Int, similarIdx: Int, collectionIdx: Int,
     setButton: (Int) -> Unit, setEpisode: (Int) -> Unit, setSeason: (Int) -> Unit,
-    setCast: (Int) -> Unit, setReview: (Int) -> Unit, setSimilar: (Int) -> Unit
+    setCast: (Int) -> Unit, setReview: (Int) -> Unit, setSimilar: (Int) -> Unit, setCollection: (Int) -> Unit
 ): Boolean {
     when (section) {
         FocusSection.BUTTONS -> if (buttonIdx > 0) setButton(buttonIdx - 1)
@@ -1014,6 +1051,7 @@ private fun handleLeft(
         FocusSection.SEASONS -> if (seasonIdx > 0) setSeason(seasonIdx - 1)
         FocusSection.CAST -> if (castIdx > 0) setCast(castIdx - 1)
         FocusSection.REVIEWS -> if (reviewIdx > 0) setReview(reviewIdx - 1)
+        FocusSection.COLLECTION -> if (collectionIdx > 0) setCollection(collectionIdx - 1)
         FocusSection.SIMILAR -> if (similarIdx > 0) setSimilar(similarIdx - 1)
     }
     return true
@@ -1021,17 +1059,18 @@ private fun handleLeft(
 
 private fun handleRight(
     section: FocusSection,
-    buttonIdx: Int, episodeIdx: Int, seasonIdx: Int, castIdx: Int, reviewIdx: Int, similarIdx: Int,
+    buttonIdx: Int, episodeIdx: Int, seasonIdx: Int, castIdx: Int, reviewIdx: Int, similarIdx: Int, collectionIdx: Int,
     uiState: DetailsUiState,
     setButton: (Int) -> Unit, setEpisode: (Int) -> Unit, setSeason: (Int) -> Unit,
-    setCast: (Int) -> Unit, setReview: (Int) -> Unit, setSimilar: (Int) -> Unit
+    setCast: (Int) -> Unit, setReview: (Int) -> Unit, setSimilar: (Int) -> Unit, setCollection: (Int) -> Unit
 ): Boolean {
     when (section) {
-        FocusSection.BUTTONS -> if (buttonIdx < 4) setButton(buttonIdx + 1)
+        FocusSection.BUTTONS -> if (buttonIdx < (if (uiState.collectionItems.isNotEmpty()) 5 else 4)) setButton(buttonIdx + 1)
         FocusSection.EPISODES -> if (episodeIdx < uiState.episodes.size - 1) setEpisode(episodeIdx + 1)
         FocusSection.SEASONS -> if (seasonIdx < uiState.totalSeasons - 1) setSeason(seasonIdx + 1)
         FocusSection.CAST -> if (castIdx < uiState.cast.size - 1) setCast(castIdx + 1)
         FocusSection.REVIEWS -> if (reviewIdx < uiState.reviews.size - 1) setReview(reviewIdx + 1)
+        FocusSection.COLLECTION -> if (collectionIdx < uiState.collectionItems.size - 1) setCollection(collectionIdx + 1)
         FocusSection.SIMILAR -> if (similarIdx < uiState.similar.size - 1) setSimilar(similarIdx + 1)
     }
     return true
@@ -1049,6 +1088,8 @@ private fun DetailsContent(
     reviews: List<Review>,
     similar: List<MediaItem>,
     similarLogoUrls: Map<String, String>,
+    collectionItems: List<MediaItem> = emptyList(),
+    collectionName: String? = null,
     focusedSection: FocusSection,
     buttonIndex: Int,
     episodeIndex: Int,
@@ -1056,6 +1097,7 @@ private fun DetailsContent(
     castIndex: Int,
     reviewIndex: Int,
     similarIndex: Int,
+    collectionIndex: Int = 0,
     isInWatchlist: Boolean,
     genres: List<String> = emptyList(),
     budget: String? = null,
@@ -1065,14 +1107,13 @@ private fun DetailsContent(
     contentHasFocus: Boolean = true,
     usePosterCards: Boolean = false,
     isMobile: Boolean = false,
-    // Persistent back callback used by the phone-layout back button overlay
-    // (issue #43). No-op by default so tablet/TV callers don't need to pass it.
     onBack: () -> Unit = {},
     onButtonClick: (Int) -> Unit = {},
     onSeasonClick: (Int) -> Unit = {},
     onEpisodeClick: (Int) -> Unit = {},
     onCastClick: (Int) -> Unit = {},
-    onSimilarClick: (Int) -> Unit = {}
+    onSimilarClick: (Int) -> Unit = {},
+    onCollectionClick: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val metadataLogoImageLoader = remember(context) {
@@ -1088,7 +1129,7 @@ private fun DetailsContent(
     val textShadow = Shadow(
         color = Color.Black.copy(alpha = 0.9f),
         offset = Offset(0f, 2f),
-        blurRadius = 8f  // Soft spread shadow for better readability
+        blurRadius = 8f
     )
 
     // ===================== MOBILE LAYOUT =====================
@@ -1471,6 +1512,42 @@ private fun DetailsContent(
                                 castMember = castMember,
                                 isFocused = false,
                                 onClick = { onCastClick(index) }
+                            )
+                        }
+                    }
+                }
+
+                // Collection items section — shown when this movie belongs to a TMDB collection
+                if (collectionItems.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = collectionName ?: stringResource(R.string.more_like_this),
+                            style = StreameSkin.typography.sectionTitle.copy(fontSize = 15.sp, fontWeight = FontWeight.Bold),
+                            color = Color.White.copy(alpha = 0.9f)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    LazyRow(
+                        modifier = Modifier.StreameDpadFocusGroup(),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        standardItemsIndexed(
+                            collectionItems,
+                            key = { index, m -> "mob_col_${m.mediaType.name}_${m.id}_$index" },
+                            contentType = { _, _ -> "collection" }
+                        ) { index, mediaItem ->
+                            SimilarMediaCard(
+                                item = mediaItem,
+                                logoImageUrl = null,
+                                usePosterCards = usePosterCards,
+                                isFocused = false,
+                                onClick = { onCollectionClick(index) }
                             )
                         }
                     }
@@ -1881,6 +1958,17 @@ private fun DetailsContent(
                         isActive = isInWatchlist
                     )
                 }
+                // "View Collection" button — shown when this movie belongs to a TMDB collection
+                if (collectionItems.isNotEmpty()) {
+                    Box(modifier = Modifier.clickable { onButtonClick(5) }) {
+                        PremiumActionButton(
+                            icon = Icons.Default.List,
+                            text = stringResource(R.string.view_collection),
+                            isFocused = focusSectionForUi == FocusSection.BUTTONS && buttonIndex == 5,
+                            isIconOnly = false
+                        )
+                    }
+                }
             }
         }
 
@@ -1894,6 +1982,7 @@ private fun DetailsContent(
         val hasCast = cast.isNotEmpty()
         val hasReviews = reviews.isNotEmpty()
         val hasSimilar = similar.isNotEmpty()
+        val hasCollection = collectionItems.isNotEmpty()
 
         // Build index map for each section (accounting for spacer items)
         var idx = 0
@@ -1906,6 +1995,9 @@ private fun DetailsContent(
         // Reviews has a spacer before it
         if (hasReviews) idx++  // spacer
         val reviewsIdx = if (hasReviews) idx.also { idx++ } else -1
+        // Collection has a spacer before it
+        if (hasCollection) idx++  // spacer
+        val collectionIdx = if (hasCollection) idx.also { idx++ } else -1
         // Similar has a spacer before it
         if (hasSimilar) idx++  // spacer
         val similarIdx = if (hasSimilar) idx.also { idx++ } else -1
@@ -1921,6 +2013,7 @@ private fun DetailsContent(
                 FocusSection.BUTTONS, FocusSection.EPISODES, FocusSection.SEASONS -> 0
                 FocusSection.CAST -> castIdx
                 FocusSection.REVIEWS -> reviewsIdx
+                FocusSection.COLLECTION -> collectionIdx
                 FocusSection.SIMILAR -> similarIdx
             }
 
@@ -2192,6 +2285,23 @@ private fun DetailsContent(
                             }
                         }
                     }
+                }
+            }
+
+            // Collection items row — shown when this movie belongs to a TMDB collection
+            if (collectionItems.isNotEmpty()) {
+                item { Spacer(modifier = Modifier.height(4.dp)) }
+                item {
+                    DetailsCollectionRail(
+                        collectionItems = collectionItems,
+                        collectionName = collectionName,
+                        collectionIndex = collectionIndex,
+                        focusSectionForUi = focusSectionForUi,
+                        usePosterCards = usePosterCards,
+                        contentStartPadding = contentStartPadding,
+                        contentOuterStartPadding = contentOuterStartPadding,
+                        onCollectionClick = onCollectionClick
+                    )
                 }
             }
 
@@ -3579,7 +3689,92 @@ private fun StatusBadge(status: String) {
 /**
  * Similar media card for "More Like This" section - same style as home screen
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun DetailsCollectionRail(
+    collectionItems: List<MediaItem>,
+    collectionName: String?,
+    collectionIndex: Int,
+    focusSectionForUi: FocusSection?,
+    usePosterCards: Boolean,
+    contentStartPadding: Dp,
+    contentOuterStartPadding: Dp,
+    onCollectionClick: (Int) -> Unit
+) {
+    val collectionRowState = rememberTvLazyListState()
+    val collectionCardWidth = if (usePosterCards) 126.dp else 210.dp
+    val collectionFocusBleed = if (usePosterCards) 18.dp else 14.dp
+    val collectionFixedFocus = focusSectionForUi == FocusSection.COLLECTION &&
+        detailsRailUsesFixedFirstSlotFocus(
+            totalItems = collectionItems.size,
+            focusedItemIndex = collectionIndex
+        )
+    HomeStyleRowAutoScroll(
+        rowState = collectionRowState,
+        isCurrentRow = focusSectionForUi == FocusSection.COLLECTION,
+        focusedItemIndex = collectionIndex,
+        totalItems = collectionItems.size,
+        itemWidth = collectionCardWidth,
+        itemSpacing = 14.dp
+    )
+
+    Column {
+        val displayName = collectionName ?: stringResource(R.string.more_like_this)
+        Text(
+            text = displayName,
+            style = StreameSkin.typography.sectionTitle.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            ),
+            color = Color.White.copy(alpha = 0.9f),
+            modifier = Modifier.padding(start = contentStartPadding, bottom = 10.dp)
+        )
+
+        Box(modifier = Modifier.fillMaxWidth()) {
+            TvLazyRow(
+                state = collectionRowState,
+                modifier = Modifier.StreameDpadFocusGroup(enableFocusRestorer = false),
+                contentPadding = PaddingValues(
+                    start = contentStartPadding,
+                    end = lockedDetailsRailEndPadding(
+                        itemWidth = collectionCardWidth,
+                        startPadding = contentStartPadding,
+                        outerStartPadding = contentOuterStartPadding,
+                        minimum = if (usePosterCards) 140.dp else 210.dp
+                    ),
+                    top = collectionFocusBleed,
+                    bottom = collectionFocusBleed,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                itemsIndexed(
+                    collectionItems,
+                    key = { index, m -> "col_${m.mediaType.name}_${m.id}_$index" }
+                ) { index, mediaItem ->
+                    val isFocused = focusSectionForUi == FocusSection.COLLECTION &&
+                        index == collectionIndex &&
+                        !collectionFixedFocus
+
+                    SimilarMediaCard(
+                        item = mediaItem,
+                        logoImageUrl = null,
+                        usePosterCards = usePosterCards,
+                        isFocused = isFocused,
+                        onClick = { onCollectionClick(index) }
+                    )
+                }
+            }
+            if (collectionFixedFocus) {
+                FixedDetailsRailFocusOverlay(
+                    startPadding = contentStartPadding,
+                    topPadding = collectionFocusBleed,
+                    width = collectionCardWidth,
+                    aspectRatio = if (usePosterCards) 2f / 3f else 16f / 9f
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SimilarMediaCard(
     item: MediaItem,

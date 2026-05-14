@@ -54,6 +54,8 @@ fun Modifier.StreameFocusable(
     onFocusChanged: (Boolean) -> Unit = {},
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }
+    // Allow the user's "Focus border colour" setting to override the default
+    val resolvedOutlineColor = LocalFocusBorderColorOverride.current ?: outlineColor
     val isPressed by interactionSource.collectIsPressedAsState()
 
     var isFocused by remember { mutableStateOf(false) }
@@ -147,8 +149,8 @@ fun Modifier.StreameFocusable(
         if (highlightAlpha > 0.01f) {
             val outline = shape.createOutline(size, layoutDirection, this)
             val borderWidth = outlineWidth.toPx()
-            val ringColor = outlineColor.copy(alpha = highlightAlpha)
-            val glowColor = outlineColor.copy(alpha = highlightAlpha * 0.4f)
+            val ringColor = resolvedOutlineColor.copy(alpha = highlightAlpha)
+            val glowColor = resolvedOutlineColor.copy(alpha = highlightAlpha * 0.4f)
 
             onDrawWithContent {
                 drawContent()

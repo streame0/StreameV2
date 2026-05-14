@@ -6,8 +6,10 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
+import com.streame.tv.ui.skin.LocalFocusBorderColorOverride
 import com.streame.tv.ui.skin.ProvideStreameSkin
 import com.streame.tv.ui.skin.StreameSkinTokens
+import com.streame.tv.ui.skin.focusBorderColorFromName
 import androidx.compose.ui.graphics.Color
 
 /**
@@ -94,9 +96,11 @@ enum class ThemeVariant(val key: String) {
 @Composable
 fun StreameTvTheme(
     variant: ThemeVariant = ThemeVariant.ARCTIC,
+    focusBorderColorName: String? = null,
     content: @Composable () -> Unit
 ) {
     val skinTokens = variant.toSkinTokens()
+    val focusBorderColor = focusBorderColorName?.let { focusBorderColorFromName(it) }
 
     // Adjust Material color scheme based on variant
     val colorScheme = when (variant) {
@@ -174,7 +178,8 @@ fun StreameTvTheme(
     val streameColors = StreameColors()
 
     CompositionLocalProvider(
-        LocalStreameColors provides streameColors
+        LocalStreameColors provides streameColors,
+        LocalFocusBorderColorOverride provides focusBorderColor
     ) {
         ProvideStreameSkin(tokens = skinTokens) {
             MaterialTheme(

@@ -32,6 +32,9 @@ val DEVICE_MODE_OVERRIDE_KEY = stringPreferencesKey("device_mode_override")
 /** Key for skipping profile selection on startup */
 val SKIP_PROFILE_SELECTION_KEY = booleanPreferencesKey("skip_profile_selection")
 
+/** Key for the focus border colour setting in settingsDataStore */
+val FOCUS_BORDER_COLOR_KEY = stringPreferencesKey("focus_border_color")
+
 /**
  * Fast-path cache for the device-mode override. Read before onCreate() during
  * cold start, where the DataStore IO would otherwise block the main thread for
