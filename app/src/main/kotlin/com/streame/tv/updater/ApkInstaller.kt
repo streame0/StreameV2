@@ -139,7 +139,7 @@ object ApkInstaller {
                 session.close()
                 return
             } catch (e: Exception) {
-                System.err.println("[ApkInstaller] Session install failed, falling back to ACTION_VIEW: ${e.message}")
+                android.util.Log.e("ApkInstaller", "Session install failed, falling back to ACTION_VIEW: ${e.message}")
             }
         }
 
@@ -153,7 +153,7 @@ object ApkInstaller {
 
             context.startActivity(intent)
         } catch (e: Exception) {
-            System.err.println("[ApkInstaller] Fallback ACTION_VIEW install failed: ${e.message}")
+                android.util.Log.e("ApkInstaller", "Fallback ACTION_VIEW install failed: ${e.message}")
         }
     }
 }

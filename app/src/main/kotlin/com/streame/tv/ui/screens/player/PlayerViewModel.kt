@@ -347,16 +347,10 @@ class PlayerViewModel @Inject constructor(
                 val resolvedProvidedUrl = resolvedProvidedStream?.url
 
                 if (resolvedProvidedUrl.isNullOrBlank()) {
-                    val isP2p = !selectedOrProvidedStream.infoHash.isNullOrBlank() ||
-                        selectedOrProvidedStream.url?.startsWith("magnet:", ignoreCase = true) == true
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         isLoadingStreams = false,
-                        error = if (isP2p) {
-                            "Selected P2P source requires TorrServer. Install TorrServer and set its URL in Settings > Addons, or choose another source."
-                        } else {
-                            "Failed to open selected source. Try another one."
-                        }
+                        error = "Failed to open selected source. Try another one."
                     )
                     return@launch
                 }
@@ -552,12 +546,11 @@ class PlayerViewModel @Inject constructor(
                 var isFirstEmission = true
 
                 progressiveFlow.collect { progressive ->
-                    // Keep ALL streams for display in the StreamSelector (including
-                    // magnet/blank-URL torrent sources). The autoplay selector and
-                    // selectStream() handle resolution via debrid / TorrServer.
+                    // Keep ALL streams for display in the StreamSelector.
+                    // The autoplay selector and selectStream() handle resolution.
                     val mergedStreams = sortStreamsByQualityAndSize(
                         progressive.streams
-                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.infoHash.orEmpty()}|${it.source}" },
+                            .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" },
                         preferredLanguage
                     )
                     lastMergedStreams = mergedStreams
@@ -1031,7 +1024,6 @@ class PlayerViewModel @Inject constructor(
         if (stream.behaviorHints?.cached == true || text.contains(" rd+")) score += 500
         if (stream.behaviorHints?.notWebReady == true) score -= 150
         if (!stream.url.isNullOrBlank() && stream.url.startsWith("http", ignoreCase = true)) score += 100
-        if (stream.url?.startsWith("magnet:", ignoreCase = true) == true) score -= 800
         score += streamRepository.getAddonHealthBias(stream.addonId)
 
         return score
@@ -1125,9 +1117,12 @@ class PlayerViewModel @Inject constructor(
     private fun autoplaySelectBest(streams: List<StreamSource>, preferredLanguage: String) {
         // Only consider streams with valid HTTP URLs for autoplay.
         // The full list may now include magnet/blank-URL torrent streams for display.
+        // Exclude notWebReady streams: they have HTTP URLs but the server must transcode
+        // first — direct ExoPlayer requests will always 403/500 immediately.
         val playable = streams.filter { stream ->
             val u = stream.url?.trim().orEmpty()
-            u.startsWith("http", ignoreCase = true)
+            u.startsWith("http", ignoreCase = true) &&
+                stream.behaviorHints?.notWebReady != true
         }
         if (playable.isEmpty()) {
             // No directly playable streams — don't auto-select; let user pick manually
@@ -1321,14 +1316,8 @@ class PlayerViewModel @Inject constructor(
             if (requestId != selectStreamRequestId) return@launch
             var url = resolvedStream.url
             if (url.isNullOrBlank()) {
-                val isP2p = !stream.infoHash.isNullOrBlank() ||
-                    (stream.url?.trim()?.startsWith("magnet:", ignoreCase = true) == true)
                 _uiState.value = _uiState.value.copy(
-                    error = if (isP2p) {
-                        "P2P stream requires TorrServer. Install TorrServer and set its URL in Settings > Addons."
-                    } else {
-                        "Failed to resolve stream. Try another source."
-                    }
+                    error = "Failed to resolve stream. Try another source."
                 )
                 return@launch
             }
@@ -1956,10 +1945,11 @@ class PlayerViewModel @Inject constructor(
             }
 
             val allStreams = result.streams
-                .filter { stream ->
-                    val u = stream.url?.trim().orEmpty()
-                    u.isNotBlank() && !u.startsWith("magnet:", ignoreCase = true)
+                .filter { s ->
+                    val u = s.url?.trim().orEmpty()
+                    u.isNotBlank()
                 }
+
 
             val mergedStreams = allStreams
                 .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }

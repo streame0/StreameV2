@@ -475,7 +475,6 @@ private fun ExtractorLink.toStreamSource(addon: Addon): StreamSource = StreamSou
     size = "",
     sizeBytes = null,
     url = url,
-    infoHash = null,
     fileIdx = null,
     behaviorHints = getAllHeaders()
         .mapNotNull { (key, value) ->
@@ -491,6 +490,5 @@ private fun ExtractorLink.toStreamSource(addon: Addon): StreamSource = StreamSou
                 proxyHeaders = ProxyHeaders(request = headers)
             )
         },
-    subtitles = emptyList(),
-    sources = emptyList()
+    subtitles = emptyList()
 )

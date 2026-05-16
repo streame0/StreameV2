@@ -168,13 +168,12 @@ import com.streame.tv.ui.theme.TextSecondary
 import kotlin.math.abs
 import androidx.compose.ui.res.stringResource
 import com.streame.tv.R
-import com.streame.tv.ui.screens.settings.TorrServerStatus
 
 internal fun cloudstreamPluginUnsupportedLabel(
     pluginApiVersion: Int,
     supportedApiVersion: Int
 ): String? {
-    return if (StreamRepository.isCloudstreamPluginApiVersionSupported(pluginApiVersion, supportedApiVersion)) {
+    return if (com.streame.tv.data.repository.StreamRepository.isCloudstreamPluginApiVersionSupported(pluginApiVersion, supportedApiVersion)) {
         null
     } else {
         "Unsupported API v$pluginApiVersion (app supports up to v$supportedApiVersion)"
@@ -300,7 +299,6 @@ fun SettingsScreen(
             add("general")
             add("catalogs")
             add("stremio")
-            add("torrserver")
             if (uiState.cloudstreamEnabled) {
                 add("cloudstream")
             }
@@ -311,8 +309,7 @@ fun SettingsScreen(
         when (section) {
             "general" -> 28 // 28 rows (including AI subtitle rows)
             "catalogs" -> uiState.catalogs.size // Add + rows
-            "stremio" -> stremioAddons.size // rows + add button
-            "torrserver" -> 4 // URL + Auto-detect + Test + Status
+            "stremio" -> stremioAddons.size + uiState.popularAddons.size + 1 // rows + popular + add + browse
             "cloudstream" -> cloudstreamPlugins.size + uiState.cloudstreamRepositories.size // plugins + repos + add button
             "accounts" -> 2 // Trakt + App Update
             else -> 0
@@ -519,7 +516,6 @@ fun SettingsScreen(
                     val currentSection = sections.getOrNull(sectionIndex).orEmpty()
                     val focusedStremioAddon = stremioAddons.getOrNull(contentFocusIndex)
                     val repoOffset = (contentFocusIndex - cloudstreamPlugins.size).takeIf { it >= 0 } ?: -1
-                    val focusedCloudstreamRepo = uiState.cloudstreamRepositories.getOrNull(repoOffset)
                     val focusedStremioAddonCanDelete = focusedStremioAddon?.let { addon ->
                         !(addon.id == "opensubtitles" && addon.type == com.streame.tv.data.model.AddonType.SUBTITLE)
                     } ?: false
@@ -543,11 +539,15 @@ fun SettingsScreen(
                                 Zone.CONTENT -> {
                                     if (currentSection == "stremio" && contentFocusIndex < stremioAddons.size && addonActionIndex > 0) {
                                         addonActionIndex = 0
-                                    } else if (currentSection == "cloudstream" &&
-                                        contentFocusIndex in 0 until (cloudstreamPlugins.size + uiState.cloudstreamRepositories.size) &&
-                                        addonActionIndex > 0
-                                    ) {
-                                        addonActionIndex = 0
+                                    } else if (currentSection == "cloudstream") {
+                                        val totalRows = cloudstreamPlugins.size + uiState.cloudstreamRepositories.size + 1
+                                        if (contentFocusIndex in 0 until totalRows && addonActionIndex > 0) {
+                                            addonActionIndex = 0
+                                        } else {
+                                            activeZone = Zone.SECTION
+                                            addonActionIndex = 0
+                                            catalogActionIndex = 0
+                                        }
                                     } else if (currentSection == "catalogs" && contentFocusIndex > 0 && catalogActionIndex > 0) {
                                         catalogActionIndex--
                                     } else {
@@ -581,17 +581,24 @@ fun SettingsScreen(
                                 }
                                 Zone.CONTENT -> {
                                     if (currentSection == "stremio" &&
-                                        contentFocusIndex in 0 until stremioAddons.size &&
-                                        addonActionIndex < 1 &&
-                                        focusedStremioAddonCanDelete
+                                        contentFocusIndex in 0 until stremioAddons.size
                                     ) {
-                                        addonActionIndex = 1
-                                    } else if (currentSection == "cloudstream" &&
-                                        contentFocusIndex in 0 until (cloudstreamPlugins.size + uiState.cloudstreamRepositories.size) &&
-                                        addonActionIndex < 1
-                                    ) {
-                                        addonActionIndex = 1
-} else if (currentSection == "catalogs" && contentFocusIndex > 0 && catalogActionIndex < 4) {
+                                        val addon = stremioAddons[contentFocusIndex]
+                                        val isConfigurable = addon.manifest?.behaviorHints?.configurable == true || 
+                                            addon.manifest?.behaviorHints?.configurationRequired == true
+                                        val maxActionIndex = if (isConfigurable && focusedStremioAddonCanDelete) 2 
+                                            else if (isConfigurable || focusedStremioAddonCanDelete) 1 
+                                            else 0
+                                        
+                                        if (addonActionIndex < maxActionIndex) {
+                                            addonActionIndex++
+                                        }
+                                    } else if (currentSection == "cloudstream") {
+                                        val totalAddonRows = cloudstreamPlugins.size + uiState.cloudstreamRepositories.size
+                                        if (contentFocusIndex in 0 until totalAddonRows && addonActionIndex < 1) {
+                                            addonActionIndex = 1
+                                        }
+                                    } else if (currentSection == "catalogs" && contentFocusIndex > 0 && catalogActionIndex < 4) {
                                         catalogActionIndex++
                                     }
                                 }
@@ -741,14 +748,58 @@ fun SettingsScreen(
                                                 contentFocusIndex in 0 until stremioAddons.size -> {
                                                     val addon = stremioAddons[contentFocusIndex]
                                                     val canDelete = !(addon.id == "opensubtitles" && addon.type == com.streame.tv.data.model.AddonType.SUBTITLE)
-                                                    if (addonActionIndex == 0 || !canDelete) {
-                                                        viewModel.toggleAddon(addon.id)
-                                                    } else {
-                                                        viewModel.removeAddon(addon.id)
-                                                        addonActionIndex = 0
-                                                        if (contentFocusIndex >= stremioAddons.size && contentFocusIndex > 0) {
-                                                            contentFocusIndex--
+                                                    val isConfigurable = addon.manifest?.behaviorHints?.configurable == true || 
+                                                        addon.manifest?.behaviorHints?.configurationRequired == true
+                                                    
+                                                    val action = if (isConfigurable) {
+                                                        when (addonActionIndex) {
+                                                            0 -> "toggle"
+                                                            1 -> "configure"
+                                                            2 -> "delete"
+                                                            else -> "toggle"
                                                         }
+                                                    } else {
+                                                        when (addonActionIndex) {
+                                                            0 -> "toggle"
+                                                            1 -> "delete"
+                                                            else -> "toggle"
+                                                        }
+                                                    }
+
+                                                    when (action) {
+                                                        "toggle" -> viewModel.toggleAddon(addon.id)
+                                                        "configure" -> {
+                                                            val configureUrl = addon.url?.let { url ->
+                                                                val base = url.substringBefore("?").trimEnd('/')
+                                                                if (base.endsWith("/manifest.json")) {
+                                                                    base.removeSuffix("/manifest.json") + "/configure"
+                                                                } else {
+                                                                    "$base/configure"
+                                                                }
+                                                            }
+                                                            if (!configureUrl.isNullOrBlank()) {
+                                                                runCatching {
+                                                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(configureUrl))
+                                                                    context.startActivity(intent)
+                                                                }
+                                                            }
+                                                        }
+                                                        "delete" -> {
+                                                            if (canDelete) {
+                                                                viewModel.removeAddon(addon.id)
+                                                                addonActionIndex = 0
+                                                                if (contentFocusIndex >= stremioAddons.size && contentFocusIndex > 0) {
+                                                                    contentFocusIndex--
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                contentFocusIndex in stremioAddons.size until (stremioAddons.size + uiState.popularAddons.size) -> {
+                                                    val popular = uiState.popularAddons[contentFocusIndex - stremioAddons.size]
+                                                    val isInstalled = stremioAddons.any { it.url?.contains(popular.url, ignoreCase = true) == true }
+                                                    if (!isInstalled) {
+                                                        viewModel.addCustomAddon(popular.url)
                                                     }
                                                 }
                                                 else -> {
@@ -771,7 +822,7 @@ fun SettingsScreen(
                                                     }
                                                 }
                                                 contentFocusIndex in cloudstreamPlugins.size until (cloudstreamPlugins.size + uiState.cloudstreamRepositories.size) -> {
-                                                    val repo = focusedCloudstreamRepo
+                                                    val repo = uiState.cloudstreamRepositories.getOrNull(contentFocusIndex - cloudstreamPlugins.size)
                                                     if (repo != null) {
                                                         if (addonActionIndex == 0) {
                                                             viewModel.addCloudstreamRepository(repo.url)
@@ -888,7 +939,6 @@ fun SettingsScreen(
                                     "general" -> Icons.Default.Settings
                                     "catalogs" -> Icons.Default.Widgets
                                     "stremio" -> Icons.Default.Widgets
-                                    "torrserver" -> Icons.Default.Cloud
                                     "cloudstream" -> Icons.Default.Cloud
                                     "accounts" -> Icons.Default.Person
                                     else -> Icons.Default.Settings
@@ -897,7 +947,6 @@ fun SettingsScreen(
                                     "general" -> stringResource(R.string.general)
                                     "catalogs" -> stringResource(R.string.catalogs)
                                     "stremio" -> stringResource(R.string.addons)
-                                    "torrserver" -> "TorrServer"
                                     "cloudstream" -> stringResource(R.string.cloudstream)
                                     "accounts" -> stringResource(R.string.accounts)
                                     else -> section.replaceFirstChar { it.uppercase() }
@@ -1024,18 +1073,31 @@ fun SettingsScreen(
                         )
                         "stremio" -> StremioAddonsSettings(
                             addons = stremioAddons,
+                            popularAddons = uiState.popularAddons,
                             focusedIndex = if (activeZone == Zone.CONTENT) contentFocusIndex else -1,
                             focusedActionIndex = addonActionIndex,
                             onToggleAddon = { viewModel.toggleAddon(it) },
                             onDeleteAddon = { viewModel.removeAddon(it) },
-                            onAddCustomAddon = { }
-                        )
-                        "torrserver" -> TorrServerSettings(
-                            baseUrl = uiState.torrServerBaseUrl,
-                            status = uiState.torrServerStatus,
-                            onBaseUrlChange = { viewModel.setTorrServerBaseUrl(it) },
-                            onTestConnection = { viewModel.testTorrServer() },
-                            onAutoDetect = { viewModel.autoDetectTorrServer() }
+                            onConfigureAddon = { addon ->
+                                val configureUrl = addon.url?.let { url ->
+                                    val base = url.substringBefore("?").trimEnd('/')
+                                    if (base.endsWith("/manifest.json")) {
+                                        base.removeSuffix("/manifest.json") + "/configure"
+                                    } else {
+                                        "$base/configure"
+                                    }
+                                }
+                                if (!configureUrl.isNullOrBlank()) {
+                                    runCatching {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(configureUrl))
+                                        context.startActivity(intent)
+                                    }
+                                }
+                            },
+                            onInstallPopularAddon = { popular ->
+                                viewModel.addCustomAddon(popular.url)
+                            },
+                            onAddCustomAddon = { showCustomAddonInput = true }
                         )
                         "cloudstream" -> CloudstreamSettings(
                             plugins = cloudstreamPlugins,
@@ -2315,14 +2377,6 @@ private fun MobileSettingsSubPage(
                     onToggleAddon = { viewModel.toggleAddon(it) },
                     onDeleteAddon = { viewModel.removeAddon(it) },
                     onAddCustomAddon = onAddCustomAddonClick
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                TorrServerSettings(
-                    baseUrl = uiState.torrServerBaseUrl,
-                    status = uiState.torrServerStatus,
-                    onBaseUrlChange = { viewModel.setTorrServerBaseUrl(it) },
-                    onTestConnection = { viewModel.testTorrServer() },
-                    onAutoDetect = { viewModel.autoDetectTorrServer() }
                 )
                 if (uiState.cloudstreamEnabled) {
                     CloudstreamSettings(
@@ -4485,12 +4539,16 @@ private fun CatalogActionChip(
 @Composable
 private fun StremioAddonsSettings(
     addons: List<com.streame.tv.data.model.Addon> = emptyList(),
+    popularAddons: List<com.streame.tv.data.repository.StreamRepository.PopularAddon> = emptyList(),
     focusedIndex: Int = -1,
     focusedActionIndex: Int = 0,
     onToggleAddon: (String) -> Unit = {},
+    onConfigureAddon: (com.streame.tv.data.model.Addon) -> Unit = {},
     onDeleteAddon: (String) -> Unit = {},
+    onInstallPopularAddon: (com.streame.tv.data.repository.StreamRepository.PopularAddon) -> Unit = {},
     onAddCustomAddon: () -> Unit = {}
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Column {
         Text(
             text = "STREMIO ADDONS",
@@ -4514,6 +4572,7 @@ private fun StremioAddonsSettings(
                     focusedAction = if (focusedIndex == index) focusedActionIndex else -1,
                     canDelete = canDelete,
                     onToggle = { onToggleAddon(addon.id) },
+                    onConfigure = { onConfigureAddon(addon) },
                     onDelete = { onDeleteAddon(addon.id) },
                     modifier = Modifier.settingsFocusSlot(index)
                 )
@@ -4525,19 +4584,43 @@ private fun StremioAddonsSettings(
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        Text(
+            text = "POPULAR ADDONS",
+            style = StreameTypography.caption.copy(fontSize = 12.sp, letterSpacing = 1.sp),
+            color = TextSecondary,
+            modifier = Modifier.padding(bottom = 10.dp)
+        )
+
+        popularAddons.forEachIndexed { index, popular ->
+            val rowIndex = addons.size + index
+            val isInstalled = addons.any { it.url?.contains(popular.url, ignoreCase = true) == true }
+            PopularAddonRow(
+                addon = popular,
+                isInstalled = isInstalled,
+                isFocused = focusedIndex == rowIndex,
+                onInstall = { onInstallPopularAddon(popular) },
+                modifier = Modifier.settingsFocusSlot(rowIndex)
+            )
+            if (index < popularAddons.size - 1) {
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         // Add custom addon button
         Row(
             modifier = Modifier
-                .settingsFocusSlot(addons.size)
+                .settingsFocusSlot(addons.size + popularAddons.size)
                 .fillMaxWidth()
                 .clickable(onClick = onAddCustomAddon)
                 .background(
-                    if (focusedIndex == addons.size) Color.White.copy(alpha = 0.1f) else BackgroundElevated,
+                    if (focusedIndex == addons.size + popularAddons.size) Color.White.copy(alpha = 0.1f) else BackgroundElevated,
                     RoundedCornerShape(12.dp)
                 )
                 .border(
-                    width = if (focusedIndex == addons.size) 2.dp else 0.dp,
-                    color = if (focusedIndex == addons.size) Pink else Color.Transparent,
+                    width = if (focusedIndex == addons.size + popularAddons.size) 2.dp else 0.dp,
+                    color = if (focusedIndex == addons.size + popularAddons.size) Pink else Color.Transparent,
                     shape = RoundedCornerShape(12.dp)
                 )
                 .padding(16.dp),
@@ -4555,6 +4638,46 @@ private fun StremioAddonsSettings(
                 text = "Add Addon",
                 style = StreameTypography.button,
                 color = Pink
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Browse more addons button
+        Row(
+            modifier = Modifier
+                .settingsFocusSlot(addons.size + popularAddons.size + 1)
+                .fillMaxWidth()
+                .clickable {
+                    runCatching<Unit> {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://web.stremio.com/addons"))
+                        context.startActivity(intent)
+                    }
+                }
+                .background(
+                    if (focusedIndex == addons.size + popularAddons.size + 1) Color.White.copy(alpha = 0.1f) else BackgroundElevated,
+                    RoundedCornerShape(12.dp)
+                )
+                .border(
+                    width = if (focusedIndex == addons.size + popularAddons.size + 1) 2.dp else 0.dp,
+                    color = if (focusedIndex == addons.size + popularAddons.size + 1) Pink else Color.Transparent,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Language,
+                contentDescription = null,
+                tint = TextPrimary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = "Browse Community Addons",
+                style = StreameTypography.body,
+                color = TextPrimary
             )
         }
     }
@@ -4761,15 +4884,20 @@ private fun CloudstreamStatusChip(
 private fun AddonRow(
     addon: com.streame.tv.data.model.Addon,
     isFocused: Boolean,
-    focusedAction: Int = -1, // 0 = toggle, 1 = delete
+    focusedAction: Int = -1, // 0 = toggle, 1 = configure, 2 = delete
     canDelete: Boolean = true,
     onToggle: () -> Unit,
+    onConfigure: (() -> Unit)? = null,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val canToggle = true
+    val isConfigurable = addon.manifest?.behaviorHints?.configurable == true || 
+        addon.manifest?.behaviorHints?.configurationRequired == true
+    
     val isToggleFocused = canToggle && isFocused && focusedAction == 0
-    val isDeleteFocused = canDelete && isFocused && focusedAction == 1
+    val isConfigureFocused = isConfigurable && isFocused && focusedAction == 1
+    val isDeleteFocused = canDelete && isFocused && (if (isConfigurable) focusedAction == 2 else focusedAction == 1)
     val isEnabled = addon.isEnabled
 
     Row(
@@ -4796,15 +4924,25 @@ private fun AddonRow(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .background(Pink.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Pink.copy(alpha = 0.2f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Widgets,
-                    contentDescription = null,
-                    tint = Pink,
-                    modifier = Modifier.size(24.dp)
-                )
+                if (!addon.logo.isNullOrBlank()) {
+                    AsyncImage(
+                        model = addon.logo,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Widgets,
+                        contentDescription = null,
+                        tint = Pink,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(16.dp))
@@ -4880,6 +5018,31 @@ private fun AddonRow(
                 }
             }
 
+            if (isConfigurable) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clickable { onConfigure?.invoke() }
+                        .background(
+                            color = if (isConfigureFocused) Pink else Color.White.copy(alpha = 0.1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .border(
+                            width = if (isConfigureFocused) 2.dp else 0.dp,
+                            color = if (isConfigureFocused) Color.White else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "Configure addon",
+                        tint = if (isConfigureFocused) Color.White else TextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
             if (canDelete) {
                 Box(
                     modifier = Modifier
@@ -4903,6 +5066,92 @@ private fun AddonRow(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PopularAddonRow(
+    addon: com.streame.tv.data.repository.StreamRepository.PopularAddon,
+    isInstalled: Boolean,
+    isFocused: Boolean,
+    onInstall: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(enabled = !isInstalled) { onInstall() }
+            .background(
+                if (isFocused) Color.White.copy(alpha = 0.1f) else BackgroundElevated,
+                RoundedCornerShape(12.dp)
+            )
+            .border(
+                width = if (isFocused) 2.dp else 0.dp,
+                color = if (isFocused) Pink else Color.Transparent,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(Pink.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    tint = Pink,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column {
+                Text(
+                    text = addon.name,
+                    style = StreameTypography.cardTitle,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = addon.description,
+                    style = StreameTypography.caption,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        if (isInstalled) {
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = "Installed",
+                tint = SuccessGreen,
+                modifier = Modifier.size(24.dp)
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .background(Pink.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "Install",
+                    style = StreameTypography.caption,
+                    color = Pink
+                )
             }
         }
     }
@@ -5144,9 +5393,10 @@ private fun CloudstreamRepositoryRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clickable { onConfigure() }
                     .background(
                         color = if (isConfigureFocused) SuccessGreen else Color.White.copy(alpha = 0.1f),
                         shape = RoundedCornerShape(8.dp)
@@ -6967,130 +7217,3 @@ val TMDB_LANGUAGES = listOf(
     "sw-KE" to "Swahili",
     "sq-AL" to "Albanian (Shqip)"
 )
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun TorrServerSettings(
-    baseUrl: String = "",
-    status: TorrServerStatus = TorrServerStatus.UNKNOWN,
-    onBaseUrlChange: (String) -> Unit = {},
-    onTestConnection: () -> Unit = {},
-    onAutoDetect: () -> Unit = {}
-) {
-    val focusManager = LocalFocusManager.current
-    var urlInput by remember(baseUrl) { mutableStateOf(baseUrl) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-    ) {
-        Text(
-            text = "TORRSERVER",
-            style = StreameTypography.caption.copy(fontSize = 12.sp, letterSpacing = 1.sp),
-            color = TextSecondary,
-            modifier = Modifier.padding(bottom = 10.dp)
-        )
-
-        Text(
-            text = "TorrServer enables playback of torrent and magnet links. Install TorrServer on this device or a local server, then enter its URL below.",
-            style = StreameTypography.body.copy(fontSize = 13.sp),
-            color = TextSecondary,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        // URL input
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 12.dp)
-        ) {
-            OutlinedTextField(
-                value = urlInput,
-                onValueChange = { newUrl ->
-                    urlInput = newUrl
-                    onBaseUrlChange(newUrl)
-                },
-                label = { Text("TorrServer URL", color = TextSecondary) },
-                placeholder = { Text("http://127.0.0.1:8090", color = TextSecondary.copy(alpha = 0.5f)) },
-                singleLine = true,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 12.dp),
-                textStyle = StreameTypography.body.copy(color = Color.White),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.White.copy(alpha = 0.6f),
-                    unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
-                    cursorColor = Color.White
-                )
-            )
-        }
-
-        // Action buttons row
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.padding(bottom = 16.dp)
-        ) {
-            // Auto-detect button
-            Button(
-                onClick = { onAutoDetect() },
-                enabled = status != TorrServerStatus.TESTING,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.15f),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                if (status == TorrServerStatus.TESTING) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = Color.White
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Text("Auto-Detect")
-            }
-
-            // Test connection button
-            Button(
-                onClick = { onTestConnection() },
-                enabled = urlInput.isNotBlank() && status != TorrServerStatus.TESTING,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.15f),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Test Connection")
-            }
-        }
-
-        // Status indicator
-        if (status != TorrServerStatus.UNKNOWN) {
-            val (statusText, statusColor) = when (status) {
-                TorrServerStatus.TESTING -> "Testing..." to Color.Yellow
-                TorrServerStatus.CONNECTED -> "Connected" to Color(0xFF4CAF50)
-                TorrServerStatus.UNREACHABLE -> "Unreachable" to Color(0xFFF44336)
-                TorrServerStatus.ERROR -> "Error" to Color(0xFFF44336)
-                TorrServerStatus.UNKNOWN -> "" to TextSecondary
-            }
-            if (statusText.isNotBlank()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(statusColor, CircleShape)
-                    )
-                    Text(
-                        text = statusText,
-                        style = StreameTypography.body.copy(fontSize = 13.sp),
-                        color = statusColor
-                    )
-                }
-            }
-        }
-    }
-}

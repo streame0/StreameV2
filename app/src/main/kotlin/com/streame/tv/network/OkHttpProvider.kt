@@ -172,6 +172,18 @@ object OkHttpProvider {
             appClient ?: buildAppClient().also { appClient = it }
         }
 
+    private val defaultUserAgentInterceptor = Interceptor { chain ->
+        val originalRequest = chain.request()
+        if (originalRequest.header("User-Agent") == null) {
+            val requestWithUserAgent = originalRequest.newBuilder()
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .build()
+            chain.proceed(requestWithUserAgent)
+        } else {
+            chain.proceed(originalRequest)
+        }
+    }
+
     /** Logging interceptor: logs request host + HTTP status (or exception) for every call.
      *  Skips image CDN hosts (image.tmdb.org) to reduce logcat noise — those are
      *  handled by the CDN cache interceptor. Uses Log.d for success to reduce
@@ -189,7 +201,16 @@ object OkHttpProvider {
             Log.d(TAG, "HTTP $method $host -> ${response.code}")
             response
         } catch (e: Exception) {
-            Log.e(TAG, "HTTP $method $host FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            val isLocal = host == "127.0.0.1" || host == "localhost"
+            val isCanceled = e is java.io.IOException && (e.message == "Canceled" || e.message?.contains("canceled", ignoreCase = true) == true)
+            
+            if (isLocal && e is java.net.ConnectException) {
+                Log.v(TAG, "HTTP $method $host FAILED (local check): ${e.message}")
+            } else if (isCanceled) {
+                Log.v(TAG, "HTTP $method $host CANCELED")
+            } else {
+                Log.e(TAG, "HTTP $method $host FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            }
             throw e
         }
     }
@@ -225,6 +246,7 @@ object OkHttpProvider {
     private fun buildAppClient(): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .addInterceptor(appLoggingInterceptor)
+            .addInterceptor(defaultUserAgentInterceptor)
 
         builder
             .addNetworkInterceptor(tmdbCacheInterceptor)

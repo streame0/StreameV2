@@ -1,6 +1,7 @@
 package com.streame.tv.ui.screens.settings
 
 import android.content.Context
+import android.util.Log
 import coil3.SingletonImageLoader
 import coil3.request.CachePolicy
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -66,10 +67,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import javax.inject.Inject
 
-enum class TorrServerStatus {
-    UNKNOWN, TESTING, CONNECTED, UNREACHABLE, ERROR
-}
-
 enum class ToastType {
     SUCCESS, ERROR, INFO
 }
@@ -128,14 +125,13 @@ data class SettingsUiState(
     val catalogSearchError: String? = null,
     // Addons
     val addons: List<Addon> = emptyList(),
+    val popularAddons: List<StreamRepository.PopularAddon> = emptyList(),
     val cloudstreamRepositories: List<CloudstreamRepositoryRecord> = emptyList(),
     val pendingCloudstreamManifest: CloudstreamRepositoryManifest? = null,
     val pendingCloudstreamRepoUrl: String? = null,
     val pendingCloudstreamPlugins: List<CloudstreamPluginIndexEntry> = emptyList(),
     val cloudstreamEnabled: Boolean = true,
     val cloudstreamSupportedApiVersion: Int = StreamRepository.SUPPORTED_CLOUDSTREAM_API_VERSION,
-    val torrServerBaseUrl: String = "",
-    val torrServerStatus: TorrServerStatus = TorrServerStatus.UNKNOWN,
     // Content language (TMDB metadata)
     val contentLanguage: String = "en-US",
     // Device mode override
@@ -280,11 +276,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     init {
+        _uiState.update { it.copy(popularAddons = streamRepository.popularAddons) }
         loadSettings()
         observeProfileChanges()
         observeAddons()
         observeCloudstreamRepositories()
-        observeTorrServer()
         observeSyncState()
         initializeCatalogs()
         observeCatalogs()
@@ -477,16 +473,6 @@ class SettingsViewModel @Inject constructor(
             streamRepository.cloudstreamRepositories.collect { repositories ->
                 if (_uiState.value.cloudstreamRepositories != repositories) {
                     _uiState.value = _uiState.value.copy(cloudstreamRepositories = repositories)
-                }
-            }
-        }
-    }
-
-    private fun observeTorrServer() {
-        viewModelScope.launch {
-            streamRepository.observeTorrServerBaseUrl().collect { url ->
-                if (_uiState.value.torrServerBaseUrl != url) {
-                    _uiState.value = _uiState.value.copy(torrServerBaseUrl = url)
                 }
             }
         }
@@ -1534,75 +1520,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setTorrServerBaseUrl(url: String) {
-        viewModelScope.launch {
-            streamRepository.setTorrServerBaseUrl(url)
-            // No cloud sync needed; this is a local playback setting.
-        }
-    }
-
-    fun testTorrServer() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(torrServerStatus = TorrServerStatus.TESTING)
-            val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                testTorrServerConnection(_uiState.value.torrServerBaseUrl)
-            }
-            _uiState.value = _uiState.value.copy(torrServerStatus = result)
-        }
-    }
-
-    fun autoDetectTorrServer() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(torrServerStatus = TorrServerStatus.TESTING)
-            val candidates = buildList {
-                val configured = _uiState.value.torrServerBaseUrl.trim().removeSuffix("/")
-                if (configured.isNotBlank()) add(configured)
-                add("http://127.0.0.1:8090")
-                add("http://localhost:8090")
-                add("http://192.168.1.1:8090")
-            }
-            var found: String? = null
-            for (url in candidates) {
-                val status = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    testTorrServerConnection(url)
-                }
-                if (status == TorrServerStatus.CONNECTED) {
-                    found = url
-                    break
-                }
-            }
-            if (found != null) {
-                streamRepository.setTorrServerBaseUrl(found)
-                _uiState.value = _uiState.value.copy(
-                    torrServerBaseUrl = found,
-                    torrServerStatus = TorrServerStatus.CONNECTED
-                )
-            } else {
-                _uiState.value = _uiState.value.copy(torrServerStatus = TorrServerStatus.UNREACHABLE)
-            }
-        }
-    }
-
-    private suspend fun testTorrServerConnection(baseUrl: String): TorrServerStatus {
-        if (baseUrl.isBlank()) return TorrServerStatus.UNREACHABLE
-        val url = baseUrl.removeSuffix("/")
-        return try {
-            val response = withTimeoutOrNull(5000L) {
-                val okUrl = java.net.URL("$url/echo")
-                val conn = okUrl.openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "GET"
-                conn.connectTimeout = 4000
-                conn.readTimeout = 4000
-                conn.responseCode
-            }
-            if (response != null && response in 200..299) TorrServerStatus.CONNECTED
-            else TorrServerStatus.UNREACHABLE
-        } catch (_: Exception) {
-            TorrServerStatus.UNREACHABLE
-        }
-    }
-
-
     fun checkForAppUpdates(force: Boolean, showNoUpdateFeedback: Boolean) {
 
         viewModelScope.launch {
@@ -1788,7 +1705,7 @@ class SettingsViewModel @Inject constructor(
                 // Start polling for token
                 startTraktPolling(deviceCode)
             } catch (e: Exception) {
-                System.err.println("SettingsVM: failed to start Trakt auth: ${e.message}")
+                Log.e("SettingsVM", "failed to start Trakt auth: ${e.message}")
                 val message = when (e) {
                     is retrofit2.HttpException -> "Trakt activation failed (${e.code()})"
                     else -> e.message?.takeIf { it.isNotBlank() } ?: "Trakt activation failed"

@@ -150,7 +150,6 @@ data class StremioCatalogExtra(
 @Keep
 data class StremioAddonBehaviorHints(
     val adult: Boolean? = null,
-    val p2p: Boolean? = null,
     val configurable: Boolean? = null,
     val configurationRequired: Boolean? = null
 )
@@ -189,13 +188,12 @@ data class StremioStream(
     val title: String? = null,
     val description: String? = null,        // Some addons put size/quality info here
     val url: String? = null,
-    val infoHash: String? = null,
+    val infoHash: String? = null,          // Torrent info hash
     val fileIdx: Int? = null,
     val ytId: String? = null,              // YouTube video ID
     val externalUrl: String? = null,        // External URL to open
     @SerializedName("headers") val headers: Map<String, String>? = null,
     val behaviorHints: StreamBehaviorHints? = null,
-    val sources: List<String>? = null,
     val subtitles: List<StremioSubtitle>? = null
 ) {
     // Parse quality from title or name
@@ -321,7 +319,11 @@ data class StremioStream(
      * Get the best available stream URL
      */
     fun getStreamUrl(): String? {
-        return url ?: externalUrl
+        if (url != null) return url
+        if (infoHash != null) {
+            return "magnet:?xt=urn:btih:$infoHash"
+        }
+        return externalUrl
     }
 
     /**

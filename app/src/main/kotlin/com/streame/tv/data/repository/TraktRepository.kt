@@ -545,6 +545,10 @@ class TraktRepository @Inject constructor(
         season: Int? = null,
         episode: Int? = null
     ): TraktScrobbleResponse? {
+        // Trakt returns 422 if progress is 0 or metadata is missing
+        if (progress <= 0f) return null
+        if (mediaType == MediaType.TV && (season == null || episode == null)) return null
+
         val body = buildScrobbleBody(mediaType, tmdbId, progress, season, episode)
         return executeWithRetry("Scrobble start") {
             val auth = getAuthHeader() ?: throw IllegalStateException("Missing auth")
@@ -563,6 +567,10 @@ class TraktRepository @Inject constructor(
         season: Int? = null,
         episode: Int? = null
     ): TraktScrobbleResponse? {
+        // Trakt returns 422 if progress is 0 or metadata is missing
+        if (progress <= 0f) return null
+        if (mediaType == MediaType.TV && (season == null || episode == null)) return null
+
         val key = "$tmdbId-$season-$episode"
         val now = System.currentTimeMillis()
 
@@ -1087,7 +1095,7 @@ class TraktRepository @Inject constructor(
                         getAllHiddenProgressShows(currentAuth)
                     }
                 } catch (e: Exception) {
-                    System.err.println("TraktRepo:getCW: getHiddenShows failed: ${e.message}")
+            AppLogger.e("TraktRepo", "getCW: getHiddenShows failed: ${e.message}")
                     emptyList()
                 }
             }
@@ -1097,7 +1105,7 @@ class TraktRepository @Inject constructor(
                         getAllHiddenProgressResetShows(currentAuth)
                     }
                 } catch (e: Exception) {
-                    System.err.println("TraktRepo:getCW: getHiddenResetShows failed: ${e.message}")
+            AppLogger.e("TraktRepo", "getCW: getHiddenResetShows failed: ${e.message}")
                     emptyList()
                 }
             }
@@ -1185,7 +1193,7 @@ class TraktRepository @Inject constructor(
                     processedKeys.add("${MediaType.TV}:$tmdbId")
                 }
             } catch (e: Exception) {
-                System.err.println("TraktRepo:getCW: playback progress failed: ${e.message}")
+            AppLogger.e("TraktRepo", "getCW: playback progress failed: ${e.message}")
             }
 
             try {
@@ -1227,7 +1235,7 @@ class TraktRepository @Inject constructor(
                                     )
                                 }
                             } catch (e: Exception) {
-                                System.err.println("TraktRepo:getCW: show progress failed for ${show.title}: ${e.message}")
+            AppLogger.e("TraktRepo", "getCW: show progress failed for ${show.title}: ${e.message}")
                                 return@withPermit null
                             }
 
@@ -1273,7 +1281,7 @@ class TraktRepository @Inject constructor(
                 }
                 watchedProgressFetched = true
             } catch (e: Exception) {
-                System.err.println("TraktRepo:getCW: watched progress failed: ${e.message}")
+            AppLogger.e("TraktRepo", "getCW: watched progress failed: ${e.message}")
             }
 
             // 3. Hydrate with TMDB Details (Parallel)
@@ -1355,7 +1363,7 @@ class TraktRepository @Inject constructor(
                         }
                     } catch (e: Exception) {
                         // Keep local/cached item if TMDB hydration fails - don't lose user's continue watching entry
-                        System.err.println("TraktRepo:getCW: TMDB hydration failed for ${candidate.item.title}: ${e.message}")
+            AppLogger.e("TraktRepo", "getCW: TMDB hydration failed for ${candidate.item.title}: ${e.message}")
                         candidate.item
                     }
                 }

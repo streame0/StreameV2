@@ -178,7 +178,6 @@ class StreamRepository @Inject constructor(
     private fun pendingAddonsKey() = profileManager.profileStringKey("pending_addons")
     private fun pendingAddonsKeyFor(profileId: String) = profileManager.profileStringKeyFor(profileId, "pending_addons")
     private fun hiddenBuiltInAddonsKey() = profileManager.profileStringKey("hidden_builtin_addons_v1")
-    private fun torrServerBaseUrlKey() = profileManager.profileStringKey("torrserver_base_url_v1")
     private fun addonHealthKeyFor(profileId: String) = profileManager.profileStringKeyFor(profileId, "addon_health_v1")
     private val qualityFiltersKey = stringPreferencesKey("quality_filters")
     private fun cloudstreamReposKey() = profileManager.profileStringKey("cloudstream_repositories_v1")
@@ -231,15 +230,6 @@ class StreamRepository @Inject constructor(
         cachedQualityFilters = PrecompiledQualityFilter(regexes, isEmpty = regexes.isEmpty())
         synchronized(streamResultCache) { streamResultCache.clear() }
     }
-    fun observeTorrServerBaseUrl(): Flow<String> =
-        profileManager.activeProfileId.combine(context.streamDataStore.data) { _, prefs ->
-            prefs[torrServerBaseUrlKey()].orEmpty()
-        }
-
-    suspend fun setTorrServerBaseUrl(raw: String) {
-        // Allow blank to reset to default autodetect.
-        context.streamDataStore.edit { prefs -> prefs[torrServerBaseUrlKey()] = raw.trim() }
-    }
 
     // Default addons - only built-in sources that work without configuration
     // Users must add their own streaming addons via Settings > Addons
@@ -251,6 +241,50 @@ class StreamRepository @Inject constructor(
             type = AddonType.SUBTITLE,
             isEnabled = true
         )
+    )
+
+    val popularAddons = listOf(
+        PopularAddon(
+            name = "Torrentio",
+            description = "Torrents from various providers (YTS, EZTV, RARBG, etc.)",
+            url = "https://torrentio.strem.fun/manifest.json"
+        ),
+        PopularAddon(
+            name = "MediaFusion",
+            description = "Multi-source addon for Movies, Series, Live TV and more",
+            url = "https://mediafusion.elfhosted.com/manifest.json"
+        ),
+        PopularAddon(
+            name = "Comet",
+            description = "High-speed Stremio addon for Debrid services",
+            url = "https://comet.elfhosted.com/manifest.json"
+        ),
+        PopularAddon(
+            name = "AIOStreams",
+            description = "All-in-one streams aggregator with Debrid support",
+            url = "https://aiostreams.elfhosted.com/manifest.json"
+        ),
+        PopularAddon(
+            name = "KnightCrawler",
+            description = "Crowdsourced torrent index for Stremio",
+            url = "https://knightcrawler.elfhosted.com/manifest.json"
+        ),
+        PopularAddon(
+            name = "ThePirateBay+",
+            description = "The Pirate Bay addon with debrid support",
+            url = "https://tpba.elfhosted.com/manifest.json"
+        ),
+        PopularAddon(
+            name = "Cyberflix",
+            description = "Catalogs for Netflix, Disney+, Hulu and more",
+            url = "https://cyberflix.elfhosted.com/manifest.json"
+        )
+    )
+
+    data class PopularAddon(
+        val name: String,
+        val description: String,
+        val url: String
     )
 
     private fun decodeHiddenBuiltIns(prefs: Preferences): Set<String> {
@@ -448,7 +482,7 @@ class StreamRepository @Inject constructor(
             }
 
             val transportUrl = getTransportUrl(normalizedUrl)
-            val addonManifest = convertToAddonManifest(manifest)
+            val addonManifest = convertToAddonManifest(manifest, manifestUrl)
             val resolvedName = customName?.trim()?.takeIf { it.isNotBlank() } ?: manifest.name
             val addonId = buildAddonInstanceId(manifest.id, normalizedUrl)
 
@@ -718,7 +752,7 @@ class StreamRepository @Inject constructor(
     /**
      * Convert API manifest response to our model
      */
-    private fun convertToAddonManifest(manifest: StremioManifestResponse): AddonManifest {
+    private fun convertToAddonManifest(manifest: StremioManifestResponse, manifestUrl: String): AddonManifest {
         val resources = manifest.resources?.mapNotNull { resource ->
             when (resource) {
                 is String -> AddonResource(name = resource.trim().lowercase(Locale.US))
@@ -758,8 +792,8 @@ class StreamRepository @Inject constructor(
             name = manifest.name,
             version = manifest.version,
             description = manifest.description ?: "",
-            logo = manifest.logo,
-            background = manifest.background,
+            logo = resolveRelativeUrl(manifest.logo, manifestUrl),
+            background = resolveRelativeUrl(manifest.background, manifestUrl),
             types = manifest.types ?: emptyList(),
             resources = resources,
             catalogs = catalogs,
@@ -767,12 +801,33 @@ class StreamRepository @Inject constructor(
             behaviorHints = manifest.behaviorHints?.let {
                 com.streame.tv.data.model.AddonBehaviorHints(
                     adult = it.adult ?: false,
-                    p2p = it.p2p ?: false,
                     configurable = it.configurable ?: false,
                     configurationRequired = it.configurationRequired ?: false
                 )
             }
         )
+    }
+
+    private fun resolveRelativeUrl(url: String?, manifestUrl: String): String? {
+        val raw = url?.trim() ?: return null
+        if (raw.isBlank()) return null
+        if (raw.startsWith("http://", ignoreCase = true) || 
+            raw.startsWith("https://", ignoreCase = true) ||
+            raw.startsWith("data:", ignoreCase = true)) {
+            return raw
+        }
+        
+        if (raw.startsWith("//")) return "https:$raw"
+        
+        val base = manifestUrl.substringBefore("?").substringBeforeLast("/", "")
+        return if (raw.startsWith("/")) {
+            // Origin relative
+            val uri = java.net.URI(manifestUrl)
+            "${uri.scheme}://${uri.host}${if (uri.port != -1) ":${uri.port}" else ""}$raw"
+        } else {
+            // Path relative
+            "$base/$raw"
+        }
     }
 
     suspend fun removeAddon(addonId: String) {
@@ -1938,7 +1993,7 @@ class StreamRepository @Inject constructor(
                     allowNetwork = true
                 )
             }.onFailure { e ->
-                System.err.println("[VOD] resolveMovieVodSources failed: ${e.message}")
+                Log.e("StreamRepo", "[VOD] resolveMovieVodSources failed: ${e.message}")
             }.getOrDefault(emptyList())
         }.orEmpty()
     }
@@ -1986,7 +2041,6 @@ class StreamRepository @Inject constructor(
                     size = stream.getSize(),
                     sizeBytes = parseSizeToBytes(stream.getSize()),
                     url = streamUrl,
-                    infoHash = stream.infoHash,
                     fileIdx = stream.fileIdx,
                     behaviorHints = stream.behaviorHints?.let {
                         val requestHeaders = mergeRequestHeaders(
@@ -2020,8 +2074,7 @@ class StreamRepository @Inject constructor(
                                 ?.let { headers -> ModelProxyHeaders(request = headers) }
                         )
                     },
-                    subtitles = embeddedSubs,
-                    sources = stream.sources ?: emptyList()
+                    subtitles = embeddedSubs
                 )
             }
     }
@@ -2038,11 +2091,6 @@ class StreamRepository @Inject constructor(
         val url = stream.url?.trim().orEmpty()
         if (url.isNotBlank()) {
             return "url:${url.substringBefore('|').substringBefore('#')}|${stream.source}"
-        }
-
-        val infoHash = stream.infoHash?.trim()?.lowercase(Locale.US).orEmpty()
-        if (infoHash.isNotBlank()) {
-            return "ih:${stream.addonId}|$infoHash|${stream.fileIdx ?: -1}|${stream.source}"
         }
 
         return "meta:${stream.addonId}|${stream.source}|${stream.quality}|${stream.size}"
@@ -2328,7 +2376,7 @@ class StreamRepository @Inject constructor(
                     allowNetwork = true
                 )
             }.onFailure { e ->
-                System.err.println("[VOD] resolveEpisodeVodSources failed: ${e.message}")
+                Log.e("StreamRepo", "[VOD] resolveEpisodeVodSources failed: ${e.message}")
             }.getOrDefault(emptyList())
         }.orEmpty()
     }
@@ -2369,7 +2417,6 @@ class StreamRepository @Inject constructor(
 
     /**
      * Internal VOD source resolution placeholder.
-     * Will be replaced with TorrServer-based resolution in a future update.
      */
     private suspend fun resolveVodSourcesInternal(
         title: String,
@@ -2499,10 +2546,6 @@ class StreamRepository @Inject constructor(
     private val STREAM_PREWARM_NETWORK_TIMEOUT_MS = 700L
 
     private fun resolvedStreamCacheKey(stream: StreamSource): String {
-        val infoHash = stream.infoHash?.trim()?.lowercase(Locale.US).orEmpty()
-        if (infoHash.isNotBlank()) {
-            return "ih:${stream.addonId}|$infoHash:${stream.fileIdx ?: -1}"
-        }
         val url = stream.url?.trim().orEmpty()
         val urlKey = if (url.isNotBlank()) {
             url.substringBefore('|').substringBefore('#')
@@ -2658,14 +2701,7 @@ class StreamRepository @Inject constructor(
      */
     private suspend fun resolveStreamInternal(stream: StreamSource): StreamSource? {
         val url = stream.url?.trim().orEmpty()
-        if (url.isBlank()) {
-            val magnet = buildMagnetForStream(stream) ?: return null
-            return resolveTorrentViaTorrServer(stream, magnet)
-        }
-
-        if (url.startsWith("magnet:", ignoreCase = true)) {
-            return resolveTorrentViaTorrServer(stream, url)
-        }
+        if (url.isBlank()) return null
 
         val normalizedUrl = when {
             url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true) -> url
@@ -2842,127 +2878,6 @@ class StreamRepository @Inject constructor(
 
     private fun decodeHeaderPart(value: String): String {
         return runCatching { URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
-    }
-
-    private fun buildMagnetForStream(stream: StreamSource): String? {
-        val infoHash = stream.infoHash?.trim().orEmpty()
-        if (infoHash.isBlank()) return null
-
-        // Stremio addons usually provide raw 40-char hex infoHash.
-        val cleanHash = infoHash.lowercase().removePrefix("urn:btih:").removePrefix("btih:")
-        if (cleanHash.isBlank()) return null
-
-        val dn = (stream.behaviorHints?.filename?.trim().takeUnless { it.isNullOrBlank() }
-            ?: stream.source.trim().takeUnless { it.isNullOrBlank() }
-            ?: "video")
-
-        val trackers = stream.sources
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .map { it.removePrefix("tracker:").trim() }
-            .filter { it.startsWith("http://", true) || it.startsWith("https://", true) || it.startsWith("udp://", true) }
-            .distinct()
-
-        val sb = StringBuilder()
-        sb.append("magnet:?xt=urn:btih:").append(cleanHash)
-        sb.append("&dn=").append(URLEncoder.encode(dn, "UTF-8"))
-        trackers.forEach { tr ->
-            sb.append("&tr=").append(URLEncoder.encode(tr, "UTF-8"))
-        }
-        return sb.toString()
-    }
-
-    private fun normalizeTorrServerBaseUrl(raw: String): String {
-        val trimmed = raw.trim().removeSuffix("/")
-        if (trimmed.isBlank()) return ""
-        return when {
-            trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true) -> trimmed
-            trimmed.startsWith("//") -> "http:$trimmed"
-            else -> "http://$trimmed"
-        }
-    }
-
-    private suspend fun resolveTorrentViaTorrServer(stream: StreamSource, magnet: String): StreamSource? {
-        val configured = normalizeTorrServerBaseUrl(context.streamDataStore.data.first()[torrServerBaseUrlKey()].orEmpty())
-        val candidates = buildList {
-            if (configured.isNotBlank()) add(configured)
-            // Common defaults on Android TV boxes / Fire TV.
-            add("http://127.0.0.1:8090")
-            add("http://localhost:8090")
-        }.distinct()
-
-        val encodedMagnet = URLEncoder.encode(magnet, "UTF-8")
-
-        // Try multiple endpoints because TorrServer versions differ.
-        val endpointPaths = listOf(
-            "/stream?m3u&link=$encodedMagnet",
-            "/torrent/play?m3u=true&link=$encodedMagnet"
-        )
-
-        val client = okHttpClient.newBuilder()
-            .callTimeout(1500, TimeUnit.MILLISECONDS)
-            .connectTimeout(1000, TimeUnit.MILLISECONDS)
-            .readTimeout(1500, TimeUnit.MILLISECONDS)
-            .build()
-
-        for (base in candidates) {
-            for (path in endpointPaths) {
-                val url = base + path
-                val isM3uEndpoint = path.contains("m3u", ignoreCase = true)
-
-                if (isM3uEndpoint) {
-                    val request = Request.Builder().url(url).get().build()
-                    val response = runCatching { client.newCall(request).execute() }.getOrNull() ?: continue
-                    response.use { resp ->
-                        if (!resp.isSuccessful) return@use
-                        val body = resp.body?.string().orEmpty()
-                        if (body.isBlank()) return@use
-                        val resolvedUrl = pickBestM3uUrl(base, body, stream.fileIdx) ?: return@use
-                        return stream.copy(url = resolvedUrl)
-                    }
-                } else {
-                    // Direct stream endpoint: don't read the body (it can be the entire video).
-                    val request = Request.Builder()
-                        .url(url)
-                        .header("Range", "bytes=0-1")
-                        .get()
-                        .build()
-                    val response = runCatching { client.newCall(request).execute() }.getOrNull() ?: continue
-                    response.use { resp ->
-                        if (resp.isSuccessful) {
-                            return stream.copy(url = url)
-                        }
-                    }
-                }
-            }
-        }
-
-        return null
-    }
-
-    private fun pickBestM3uUrl(base: String, m3u: String, fileIdx: Int?): String? {
-        val entries = m3u.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .filterNot { it.startsWith("#") }
-            .map { line ->
-                when {
-                    line.startsWith("http://", true) || line.startsWith("https://", true) -> line
-                    line.startsWith("/") -> base + line
-                    else -> "$base/$line"
-                }
-            }
-            .toList()
-
-        if (entries.isEmpty()) return null
-
-        if (fileIdx != null) {
-            val match = entries.firstOrNull { it.contains("index=$fileIdx") || it.contains("file=$fileIdx") }
-            if (match != null) return match
-        }
-
-        // Otherwise pick the first entry. TorrServer generally orders best match first.
-        return entries.first()
     }
 
     // ========== Helpers ==========

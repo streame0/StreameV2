@@ -8,7 +8,7 @@
         </trust-anchors>
     </base-config>
 
-    <!-- Localhost / LAN: Stremio addons, TorrServer, and local scrapers
+    <!-- Localhost / LAN: Stremio addons and local scrapers
          often run on HTTP on the local network. -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>

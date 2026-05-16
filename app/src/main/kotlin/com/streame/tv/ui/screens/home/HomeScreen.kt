@@ -1,32 +1,18 @@
-@file:OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class)
+@file:OptIn(ExperimentalTvMaterial3Api::class, androidx.media3.common.util.UnstableApi::class)
 
 package com.streame.tv.ui.screens.home
 
 import android.content.Context
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.res.painterResource
 import com.streame.tv.R
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,17 +32,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Circle
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -75,18 +54,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -98,7 +73,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -106,7 +80,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.foundation.lazy.LazyColumn
@@ -121,8 +95,8 @@ import coil3.svg.SvgDecoder
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.*
 import coil3.size.Precision
+import com.streame.tv.data.model.Profile
 import com.streame.tv.data.model.Category
-import com.streame.tv.data.model.CatalogConfig
 import com.streame.tv.data.model.CollectionTileShape
 import com.streame.tv.data.model.MediaItem
 import com.streame.tv.data.model.MediaType
@@ -149,13 +123,8 @@ import com.streame.tv.ui.focus.rememberStreameDpadRepeatGate
 import com.streame.tv.ui.skin.StreameFocusableSurface
 import com.streame.tv.ui.skin.StreameSkin
 import com.streame.tv.ui.skin.rememberStreameCardShape
-import com.streame.tv.ui.theme.AnimationConstants
 import com.streame.tv.ui.theme.StreameTypography
-import com.streame.tv.ui.theme.BackgroundCard
 import com.streame.tv.ui.theme.BackgroundDark
-import com.streame.tv.ui.theme.AccentRed
-import com.streame.tv.ui.theme.PrimeBlue
-import com.streame.tv.ui.theme.PrimeGreen
 import com.streame.tv.ui.theme.TextPrimary
 import com.streame.tv.ui.theme.TextSecondary
 import com.streame.tv.ui.theme.BackgroundGradientCenter
@@ -179,11 +148,9 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.abs
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.res.stringResource
@@ -297,6 +264,7 @@ private data class HomeHeroPlaybackHandles(
     val hlsFactory: HlsMediaSource.Factory
 )
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 private fun createHomeHeroPlaybackHandles(context: Context): HomeHeroPlaybackHandles {
     val heroOkHttp = OkHttpClient.Builder()
         .connectionPool(ConnectionPool(2, 2, TimeUnit.MINUTES))
@@ -465,7 +433,7 @@ fun HomeScreen(
     preloadedHeroItem: MediaItem? = null,
     preloadedHeroLogoUrl: String? = null,
     preloadedLogoCache: Map<String, String> = emptyMap(),
-    currentProfile: com.streame.tv.data.model.Profile? = null,
+    currentProfile: Profile? = null,
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit = { _, _, _, _ -> },
     onNavigateToCollection: (String) -> Unit = {},
     onNavigateToPlayer: (MediaType, Int, Int?, Int?, String?, String?, String?, String?, String?, Long?, StreamSource?) -> Unit = { _, _, _, _, _, _, _, _, _, _, _ -> },
@@ -752,6 +720,15 @@ fun HomeScreen(
     }
 
     LaunchedEffect(heroVideoUrl) {
+        fun applyMediaSource(player: ExoPlayer?, handles: HomeHeroPlaybackHandles, mi: androidx.media3.common.MediaItem, url: String) {
+            val lower = url.lowercase(Locale.getDefault())
+            if (lower.contains(".m3u8") || lower.contains("/hls") || lower.contains("format=hls")) {
+                player?.setMediaSource(handles.hlsFactory.createMediaSource(mi))
+            } else {
+                player?.setMediaItem(mi)
+            }
+        }
+
         if (heroVideoUrl != null && heroPlaybackHandles == null) {
             heroPlaybackHandles = createHomeHeroPlaybackHandles(context)
         }
@@ -764,12 +741,7 @@ fun HomeScreen(
                 val mi = androidx.media3.common.MediaItem.Builder()
                     .setUri(heroVideoUrl)
                     .build()
-                val lower = heroVideoUrl.lowercase(Locale.getDefault())
-                if (lower.contains(".m3u8") || lower.contains("/hls") || lower.contains("format=hls")) {
-                    player?.setMediaSource(handles.hlsFactory.createMediaSource(mi))
-                } else {
-                    player?.setMediaItem(mi)
-                }
+                applyMediaSource(player, handles, mi, heroVideoUrl)
                 player?.prepare()
                 preparedHeroVideoUrl = heroVideoUrl
             }
@@ -1445,7 +1417,7 @@ private fun HomeHeroLayer(
     heroItem: MediaItem?,
     heroLogoUrl: String?,
     heroOverviewOverride: String?,
-    contentStartPadding: androidx.compose.ui.unit.Dp,
+    contentStartPadding: Dp,
     isMobile: Boolean = false,
     showBudget: Boolean = true,
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit = { _, _, _, _ -> },
@@ -1479,227 +1451,6 @@ private fun HomeHeroLayer(
                             .padding(start = contentStartPadding, end = 400.dp)
                             .offset(y = -heroBottomPadding)
                     )
-                }
-            }
-        }
-    }
-}
-
-/** Compact mobile hero overlay with gradient, title, metadata, description, and action buttons. */
-@Composable
-private fun MobileHeroOverlay(
-    item: MediaItem,
-    overviewOverride: String?,
-    contentStartPadding: androidx.compose.ui.unit.Dp,
-    onPlay: () -> Unit,
-    onDetails: () -> Unit
-) {
-    val context = LocalContext.current
-    val metadataLogoImageLoader = remember(context) {
-        ImageLoader.Builder(context)
-            .components {
-                add(OkHttpNetworkFetcherFactory(callFactory = { OkHttpProvider.coilClient }))
-                add(SvgDecoder.Factory())
-            }
-            .build()
-    }
-    val mobileHeroGradient = remember {
-        Brush.verticalGradient(
-            listOf(
-                Color.Transparent,
-                Color.Transparent,
-                Color.Black.copy(alpha = 0.7f),
-                Color.Black.copy(alpha = 0.95f)
-            )
-        )
-    }
-
-    val textShadow = Shadow(
-        color = Color.Black.copy(alpha = 0.9f),
-        offset = Offset(0f, 2f),
-        blurRadius = 8f
-    )
-
-    val genreText = remember(item.id, item.genreIds) {
-        val genreMap = if (item.mediaType == MediaType.TV) tvGenres else movieGenres
-        item.genreIds.mapNotNull { genreMap[it] }.take(2).joinToString(" | ")
-    }
-    val year = item.releaseDate?.take(4)?.takeIf { it.isNotEmpty() } ?: item.year
-    val rating = item.imdbRating.ifEmpty { item.tmdbRating }
-    val ratingValue = parseRatingValue(rating)
-    val hasMetadata = genreText.isNotEmpty() || year.isNotEmpty() || ratingValue > 0f
-
-    val displayOverview = (overviewOverride ?: item.overview)
-        .replace(Regex("<[^>]*>"), " ")
-        .replace(Regex("[\\u00A0\\u2007\\u202F]"), " ")
-        .replace(Regex("\\p{Z}+"), " ")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-        .ifBlank { "No description available." }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .fillMaxHeight(0.42f)
-            .zIndex(3f)
-    ) {
-        // Bottom gradient over the backdrop
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.6f)
-                .align(Alignment.BottomCenter)
-                .background(mobileHeroGradient)
-        )
-
-        // Content at the bottom
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = contentStartPadding, end = contentStartPadding, bottom = 12.dp)
-        ) {
-            // Title
-            Text(
-                text = item.title,
-                style = StreameTypography.heroTitle.copy(
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    shadow = textShadow
-                ),
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            if (hasMetadata) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (genreText.isNotEmpty()) {
-                        Text(
-                            text = genreText,
-                            style = StreameTypography.caption.copy(
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                shadow = textShadow
-                            ),
-                            color = Color.White.copy(alpha = 0.8f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    if (year.isNotEmpty()) {
-                        if (genreText.isNotEmpty()) {
-                            Text(
-                                text = "|",
-                                style = StreameTypography.caption.copy(fontSize = 12.sp, shadow = textShadow),
-                                color = Color.White.copy(alpha = 0.6f)
-                            )
-                        }
-                        Text(
-                            text = year,
-                            style = StreameTypography.caption.copy(
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                shadow = textShadow
-                            ),
-                            color = Color.White.copy(alpha = 0.8f),
-                            maxLines = 1
-                        )
-                    }
-                    if (ratingValue > 0f) {
-                        if (genreText.isNotEmpty() || year.isNotEmpty()) {
-                            Text(
-                                text = "|",
-                                style = StreameTypography.caption.copy(fontSize = 12.sp, shadow = textShadow),
-                                color = Color.White.copy(alpha = 0.6f)
-                            )
-                        }
-                        ImdbSvgRatingBadge(
-                            rating = rating,
-                            imageLoader = metadataLogoImageLoader,
-                            ratingFontSize = 12,
-                            logoWidth = 32.dp,
-                            logoHeight = 13.dp,
-                            textShadow = textShadow
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = displayOverview,
-                style = StreameTypography.body.copy(
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                    shadow = textShadow
-                ),
-                color = Color.White.copy(alpha = 0.75f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Action buttons
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                // Play button
-                Box(
-                    modifier = Modifier
-                        .background(AccentRed, RoundedCornerShape(8.dp))
-                        .clickable(onClick = onPlay)
-                        .padding(horizontal = 20.dp, vertical = 8.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = stringResource(R.string.play),
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = stringResource(R.string.play),
-                            style = StreameTypography.caption.copy(
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = Color.White
-                        )
-                    }
-                }
-
-                // Details button
-                Box(
-                    modifier = Modifier
-                        .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                        .clickable(onClick = onDetails)
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Info,
-                            contentDescription = stringResource(R.string.details),
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = stringResource(R.string.details),
-                            style = StreameTypography.caption.copy(
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = Color.White
-                        )
-                    }
                 }
             }
         }
@@ -2013,7 +1764,7 @@ private fun HomeInputLayer(
     focusState: HomeFocusState,
     limitRowsDuringStartup: Boolean,
     suppressSelectUntilMs: Long = 0L,
-    contentStartPadding: androidx.compose.ui.unit.Dp,
+    contentStartPadding: Dp,
     fastScrollThresholdMs: Long,
     usePosterCards: Boolean,
     isContextMenuOpen: Boolean,
@@ -2022,7 +1773,7 @@ private fun HomeInputLayer(
     heroOverviewOverride: String? = null,
     onPlay: () -> Unit = {},
     onDetails: () -> Unit = {},
-    currentProfile: com.streame.tv.data.model.Profile?,
+    currentProfile: Profile?,
     profileCount: Int = 1,
     clockFormat: String = "24h",
     onItemFocusedPrefetch: (MediaItem) -> Unit = {},
@@ -2398,7 +2149,7 @@ private fun HomeRowsLayer(
     cardLogoUrls: Map<String, String>,
     focusState: HomeFocusState,
     limitRowsDuringStartup: Boolean,
-    contentStartPadding: androidx.compose.ui.unit.Dp,
+    contentStartPadding: Dp,
     fastScrollThresholdMs: Long,
     usePosterCards: Boolean,
     isMobile: Boolean = false,
@@ -2441,7 +2192,7 @@ private fun HomeRowsLayer(
 private fun MobileHomeRowsLayer(
     categories: List<Category>,
     cardLogoUrls: Map<String, String>,
-    contentStartPadding: androidx.compose.ui.unit.Dp,
+    contentStartPadding: Dp,
     usePosterCards: Boolean,
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit = { _, _, _, _ -> },
     onItemClick: (MediaItem) -> Unit,
@@ -2468,9 +2219,9 @@ private fun MobileHomeRowsLayer(
             key = { _, category -> category.id },
             contentType = { _, _ -> "mobile_home_category_row" }
         ) { _, category ->
-            val isContinueWatching = category.id == "continue_watching"
-            val isRanked = category.title.contains("Top 10", ignoreCase = true)
-            val isCollectionRow = category.id.startsWith("collection_row_")
+            val isContinueWatching = remember(category.id) { category.id == "continue_watching" }
+            val isRanked = remember(category.title) { category.title.contains("Top 10", ignoreCase = true) }
+            val isCollectionRow = remember(category.id) { category.id.startsWith("collection_row_") }
             val rowKey = remember(category.id) { "home:${category.id}" }
             val rowUsePosterCards = rememberCatalogueRowLayoutMode(rowKey) == CardLayoutMode.POSTER
             val rowMobileItemWidth = if (rowUsePosterCards) 124.dp else 200.dp
@@ -2593,7 +2344,7 @@ private fun TvHomeRowsLayer(
     cardLogoUrls: Map<String, String>,
     focusState: HomeFocusState,
     limitRowsDuringStartup: Boolean,
-    contentStartPadding: androidx.compose.ui.unit.Dp,
+    contentStartPadding: Dp,
     fastScrollThresholdMs: Long,
     usePosterCards: Boolean,
     onItemFocusedPrefetch: (MediaItem) -> Unit = {},
@@ -2648,7 +2399,7 @@ private fun TvHomeRowsLayer(
     val density = LocalDensity.current
     val rowHeightsPx = remember(renderedCategories.size) { FloatArray(renderedCategories.size) }
     renderedCategories.forEachIndexed { index, category ->
-        androidx.compose.runtime.key(category.id) {
+        key(category.id) {
             val rowKey = remember(category.id) { "home:${category.id}" }
             val mode = rememberCatalogueRowLayoutMode(rowKey)
             val isPoster = mode == CardLayoutMode.POSTER
@@ -2703,7 +2454,7 @@ private fun TvHomeRowsLayer(
                 (SystemClock.elapsedRealtime() - focusState.lastNavEventTime) <= fastScrollThresholdMs
             if (!initialPlacement && !recentUserNav) return@LaunchedEffect
 
-            val jumpDistance = kotlin.math.abs(targetIndex - currentIndex)
+            val jumpDistance = abs(targetIndex - currentIndex)
             if (!initialPlacement && jumpDistance <= 2) {
                 val deltaPx = if (targetIndex > currentIndex) {
                     var dist = -currentOffset.toFloat()
@@ -2852,7 +2603,7 @@ private fun lockedHomeRailEndPadding(
 private fun HomeViewportRailFocusOverlay(
     category: Category,
     usePosterCards: Boolean,
-    startPadding: androidx.compose.ui.unit.Dp
+    startPadding: Dp
 ) {
     val isCollectionRow = category.id.startsWith("collection_row_")
     val effectivePosterMode = if (isCollectionRow) {
@@ -2890,103 +2641,6 @@ private fun HomeViewportRailFocusOverlay(
         isFocusedOverride = true
     ) {
         // Viewport-level focus lane: rows and cards move under this ring.
-    }
-}
-
-@Composable
-private fun ArcticFuseRatingBadge(
-    label: String,
-    rating: String,
-    backgroundColor: Color
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .background(backgroundColor, RoundedCornerShape(4.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        ) {
-            Text(
-                text = label,
-                style = StreameTypography.caption.copy(
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
-            )
-        }
-        Text(
-            text = rating,
-            style = StreameTypography.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold),
-            color = Color.White
-        )
-    }
-}
-
-@Composable
-private fun PrimeLogo(modifier: Modifier = Modifier) {
-    // Simple text-based logo for now, but blue "prime" with smile curve
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        // "prime" text
-        Text(
-            text = "prime",
-            style = TextStyle(
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Black,
-                color = PrimeBlue,
-                letterSpacing = (-0.5).sp
-            )
-        )
-        // Smile curve path could be drawn here, but text is sufficient for now
-    }
-}
-
-@Composable
-private fun IncludedWithPrimeBadge() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Check,
-            contentDescription = null,
-            tint = PrimeBlue,
-            modifier = Modifier
-                .size(16.dp)
-                .background(Color.Transparent) // No circle bg in screenshot, just check
-        )
-        Text(
-            text = stringResource(R.string.included_with_prime),
-            style = StreameTypography.caption.copy(
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp
-            ),
-            color = TextPrimary
-        )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun MetaPill(text: String) {
-    Box(
-        modifier = Modifier
-            .background(
-                color = Color.White.copy(alpha = 0.2f),
-                shape = RoundedCornerShape(2.dp)
-            )
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    ) {
-        Text(
-            text = text,
-            style = StreameTypography.caption.copy(
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
-            ),
-            color = TextPrimary
-        )
     }
 }
 
@@ -3029,49 +2683,13 @@ private fun ImdbSvgRatingBadge(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun ImdbBadge(rating: String) {
-    // Kept for compatibility but not strictly in new hero design
-    Box(
-        modifier = Modifier
-            .background(
-                color = Color(0xFFF5C518), // IMDb yellow
-                shape = RoundedCornerShape(4.dp)
-            )
-            .padding(horizontal = 8.dp, vertical = 5.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "IMDb",
-                style = StreameTypography.caption.copy(
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
-            )
-            Text(
-                text = rating,
-                style = StreameTypography.caption.copy(
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
 private fun ContentRow(
     category: Category,
     cardLogoUrls: Map<String, String>,
     isCurrentRow: Boolean,
     isRanked: Boolean = false,
     usePosterCards: Boolean = false,
-    startPadding: androidx.compose.ui.unit.Dp = 12.dp,
+    startPadding: Dp = 12.dp,
     focusedItemIndex: Int,
     isFastScrolling: Boolean,
     useViewportFocusOverlay: Boolean = false,
@@ -3148,8 +2766,8 @@ private fun ContentRow(
 
         val currentLastIndex = rowState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: currentFirstIndex
         val targetOutsideViewport = focusedItemIndex < currentFirstIndex || focusedItemIndex > currentLastIndex
-        val jumpDistance = kotlin.math.abs(scrollTargetIndex - currentFirstIndex)
-        val offsetDelta = kotlin.math.abs(extraOffset - currentFirstOffset)
+        val jumpDistance = abs(scrollTargetIndex - currentFirstIndex)
+        val offsetDelta = abs(extraOffset - currentFirstOffset)
         if (jumpDistance > 7) {
             rowState.scrollToItem(index = scrollTargetIndex, scrollOffset = extraOffset)
         } else if (
@@ -3169,7 +2787,7 @@ private fun ContentRow(
             if (
                 !isFastScrolling && (
                     rowState.firstVisibleItemIndex != scrollTargetIndex ||
-                        kotlin.math.abs(rowState.firstVisibleItemScrollOffset - extraOffset) > 6
+                        abs(rowState.firstVisibleItemScrollOffset - extraOffset) > 6
                     )
             ) {
                 rowState.scrollToItem(index = scrollTargetIndex, scrollOffset = extraOffset)

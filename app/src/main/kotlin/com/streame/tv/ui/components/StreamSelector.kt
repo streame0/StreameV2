@@ -816,32 +816,15 @@ private fun presentSource(stream: StreamSource): SourcePresentation {
         else -> null
     }
 
-    val addonLower = addonLabel.lowercase()
-    val isTorrentProvider =
-        addonLower.contains("torrentio") ||
-        addonLower.contains("torrent") ||
-        addonLower.contains("debrid") ||
-        addonLower.contains("realdebrid") ||
-        addonLower.contains("premiumize") ||
-        addonLower.contains("alldebrid") ||
-        searchBlob.contains("magnet:", ignoreCase = true)
-
     val hasDirectHttpUrl = !stream.url.isNullOrBlank() && stream.url.startsWith("http", true)
 
     val transportLabel = when {
         stream.behaviorHints?.cached == true -> "Cached"
-        !stream.infoHash.isNullOrBlank() || stream.sources.isNotEmpty() || isTorrentProvider -> "Torrent"
         hasDirectHttpUrl -> "Direct"
         else -> null
     }
     val statusLabel = when {
         stream.behaviorHints?.cached == true -> "Best Match"
-        else -> null
-    }
-
-    val multiSourceLabel = when {
-        stream.sources.size > 1 -> "${stream.sources.size} sources"
-        stream.sources.size == 1 -> "1 source"
         else -> null
     }
 
@@ -858,7 +841,6 @@ private fun presentSource(stream: StreamSource): SourcePresentation {
     val chips = buildList {
         add(addonLabel)
         transportLabel?.let(::add)
-        multiSourceLabel?.let(::add)
         languageLabel?.let(::add)
         releaseLabel?.let(::add)
         codecLabel?.let(::add)
@@ -880,7 +862,7 @@ private fun presentSource(stream: StreamSource): SourcePresentation {
         codecLabel = codecLabel,
         audioLabel = audioLabel,
         transportLabel = transportLabel,
-        multiSourceLabel = multiSourceLabel,
+        multiSourceLabel = null,
         languageLabel = languageLabel,
         statusLabel = statusLabel,
         chips = chips.distinct(),

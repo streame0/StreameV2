@@ -40,6 +40,21 @@ class BaselineProfileGenerator {
                 device.pressDPadUp()
                 device.waitForIdle(250)
             }
+
+            // Mobile scroll simulation
+            val scrollable = device.findObject(By.scrollable(true))
+            if (scrollable != null) {
+                // Scroll down
+                scrollable.setGestureMargin(device.displayWidth / 5)
+                scrollable.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)
+                device.waitForIdle(500)
+                scrollable.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)
+                device.waitForIdle(500)
+                
+                // Scroll up
+                scrollable.scroll(androidx.test.uiautomator.Direction.UP, 0.8f)
+                device.waitForIdle(500)
+            }
         }
     }
 

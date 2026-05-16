@@ -21,7 +21,7 @@ private const val EXTRACTOR_TIMEOUT_MS = 30_000L
 private const val DEFAULT_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 12; Android TV) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-private const val PREFERRED_SEPARATE_CLIENT = "android_vr"
+private const val PREFERRED_SEPARATE_CLIENT = "tvhtml5"
 
 private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
 private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
@@ -77,6 +77,21 @@ private val DEFAULT_HEADERS = mapOf(
 
 private val CLIENTS = listOf(
     YouTubeClient(
+        key = "tvhtml5",
+        id = "7",
+        version = "7.20250210.08.01",
+        userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        context = mapOf(
+            "clientName" to "TVHTML5",
+            "clientVersion" to "7.20250210.08.01",
+            "platform" to "TV",
+            "clientScreen" to "WATCH",
+            "hl" to "en",
+            "gl" to "US"
+        ),
+        priority = -1
+    ),
+    YouTubeClient(
         key = "android_vr",
         id = "28",
         version = "1.56.21",
@@ -129,6 +144,20 @@ private val CLIENTS = listOf(
             "gl" to "US"
         ),
         priority = 2
+    ),
+    YouTubeClient(
+        key = "web",
+        id = "1",
+        version = "2.20250210.00.00",
+        userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        context = mapOf(
+            "clientName" to "WEB",
+            "clientVersion" to "2.20250210.00.00",
+            "platform" to "DESKTOP",
+            "hl" to "en",
+            "gl" to "US"
+        ),
+        priority = 3
     )
 )
 
@@ -209,7 +238,13 @@ class InAppYouTubeExtractor @Inject constructor() {
                 }
 
                 for (format in streamingData.listMapValue("formats")) {
-                    val url = format.stringValue("url") ?: continue
+                    var url = format.stringValue("url")
+                    val signatureCipher = format.stringValue("signatureCipher") ?: format.stringValue("cipher")
+                    if (url.isNullOrBlank() && !signatureCipher.isNullOrBlank()) {
+                        url = decodeSignatureCipher(signatureCipher)
+                    }
+                    if (url.isNullOrBlank()) continue
+
                     val mimeType = format.stringValue("mimeType").orEmpty()
                     if (!mimeType.contains("video/") && mimeType.isNotBlank()) continue
 
@@ -235,7 +270,13 @@ class InAppYouTubeExtractor @Inject constructor() {
                 }
 
                 for (format in streamingData.listMapValue("adaptiveFormats")) {
-                    val url = format.stringValue("url") ?: continue
+                    var url = format.stringValue("url")
+                    val signatureCipher = format.stringValue("signatureCipher") ?: format.stringValue("cipher")
+                    if (url.isNullOrBlank() && !signatureCipher.isNullOrBlank()) {
+                        url = decodeSignatureCipher(signatureCipher)
+                    }
+                    if (url.isNullOrBlank()) continue
+
                     val mimeType = format.stringValue("mimeType").orEmpty()
                     val hasVideo = mimeType.contains("video/")
                     val hasAudio = mimeType.contains("audio/") || mimeType.startsWith("audio/")
@@ -646,6 +687,31 @@ class InAppYouTubeExtractor @Inject constructor() {
             headers.add("User-Agent", DEFAULT_USER_AGENT)
         }
         return headers.build()
+    }
+
+    private fun decodeSignatureCipher(cipher: String): String? {
+        return runCatching {
+            val params = cipher.split('&').associate {
+                val parts = it.split('=')
+                val key = parts[0]
+                val value = if (parts.size > 1) Uri.decode(parts[1]) else ""
+                key to value
+            }
+            val url = params["url"] ?: return null
+            val signature = params["s"] ?: params["sig"]
+            val sp = params["sp"] ?: "sig"
+
+            if (!signature.isNullOrBlank()) {
+                // If we had a JS engine, we would decipher 's' here.
+                // For 'tvhtml5' and some others, we might get away with just appending it if it's already plain
+                // or if the client doesn't use complex transformation.
+                val uri = Uri.parse(url).buildUpon()
+                uri.appendQueryParameter(sp, signature)
+                uri.build().toString()
+            } else {
+                url
+            }
+        }.getOrNull()
     }
 }
 

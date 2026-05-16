@@ -64,7 +64,7 @@ class HttpLocalScraperRuntime @Inject constructor(
                     idPrefixes = listOf("tt")
                 )
             ),
-            behaviorHints = AddonBehaviorHints(p2p = false)
+            behaviorHints = AddonBehaviorHints()
         )
         HttpLocalScraperInstallCandidate(
             name = addonManifest.name,
@@ -184,9 +184,7 @@ class HttpLocalScraperRuntime @Inject constructor(
     }
 
     private fun List<HttpResolvedStream>.sanitizeResolvedStreams(): List<HttpResolvedStream> {
-        return this
-            .filter { it.url.startsWith("http://", ignoreCase = true) || it.url.startsWith("https://", ignoreCase = true) }
-            .filterNot { it.url.startsWith("magnet:", ignoreCase = true) || it.url.contains("btih:", ignoreCase = true) }
+        return this.filter { it.url.startsWith("http://", ignoreCase = true) || it.url.startsWith("https://", ignoreCase = true) }
     }
 
     private suspend fun fetchManifest(manifestUrl: String): HttpScraperManifest? {
@@ -218,7 +216,6 @@ class HttpLocalScraperRuntime @Inject constructor(
     private fun HttpScraperEntry.isHttpOnlyEnabled(): Boolean {
         if (!enabled) return false
         val normalizedFormats = formats.map { it.lowercase(Locale.US) }.toSet()
-        if (normalizedFormats.any { it in P2P_FORMATS }) return false
         return normalizedFormats.isEmpty() || normalizedFormats.any { it in HTTP_FORMATS }
     }
 
@@ -235,13 +232,11 @@ class HttpLocalScraperRuntime @Inject constructor(
             size = "",
             sizeBytes = null,
             url = url,
-            infoHash = null,
             fileIdx = null,
             behaviorHints = cleanHeaders
                 .takeIf { it.isNotEmpty() }
                 ?.let { StreamBehaviorHints(proxyHeaders = ProxyHeaders(request = it)) },
-            subtitles = emptyList(),
-            sources = emptyList()
+            subtitles = emptyList()
         )
     }
 
@@ -266,6 +261,5 @@ class HttpLocalScraperRuntime @Inject constructor(
         private const val HTTP_LOCAL_MANIFEST_PREFIX = "http.local."
         private const val LEGACY_LOCAL_MANIFEST_PREFIX = "nu" + "vio.local."
         private val HTTP_FORMATS = setOf("mp4", "mkv", "m3u8", "hls", "dash")
-        private val P2P_FORMATS = setOf("torrent", "magnet", "p2p", "infohash")
     }
 }

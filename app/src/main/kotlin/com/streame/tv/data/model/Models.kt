@@ -156,13 +156,9 @@ data class StreamSource(
     val size: String,
     val sizeBytes: Long? = null,
     val url: String? = null,
-    val infoHash: String? = null,
     val fileIdx: Int? = null,
     val behaviorHints: StreamBehaviorHints? = null,
-    val subtitles: List<Subtitle> = emptyList(),
-    // Stremio "sources" are commonly tracker URLs. Keeping them helps P2P playback (TorrServer) work
-    // across more addons.
-    val sources: List<String> = emptyList()
+    val subtitles: List<Subtitle> = emptyList()
 ) : Serializable
 
 /**
@@ -245,7 +241,6 @@ data class AddonCatalogExtra(
 
 data class AddonBehaviorHints(
     val adult: Boolean = false,
-    val p2p: Boolean = false,
     val configurable: Boolean = false,
     val configurationRequired: Boolean = false
 ) : Serializable

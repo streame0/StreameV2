@@ -2,6 +2,7 @@ package com.streame.tv.ui.screens.home
 
 import android.app.ActivityManager
 import android.content.Context
+import android.util.Log
 import com.streame.tv.util.settingsDataStore
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -29,6 +30,9 @@ import com.streame.tv.data.repository.StreamRepository
 import com.streame.tv.data.repository.CollectionTemplateManifest
 import com.streame.tv.data.repository.WatchHistoryRepository
 import com.streame.tv.data.repository.WatchlistRepository
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import org.json.JSONObject
 import com.streame.tv.util.Constants
 import com.streame.tv.util.DeviceType
 import com.streame.tv.util.LAST_APP_LANGUAGE_KEY
@@ -274,7 +278,7 @@ class HomeViewModel @Inject constructor(
     init {
         android.util.Log.d("LogoDebug", "device: isLowRam=$isLowRamDevice isTv=$isTvDevice memClass=${activityManager.memoryClass}")
     }
-    private val gson = com.google.gson.Gson()
+    private val gson = Gson()
 
     // Disk cache key for the home categories — profile-scoped so each profile gets
     // its own cached home screen. On app launch, the cached categories are shown
@@ -323,7 +327,7 @@ class HomeViewModel @Inject constructor(
             }
             val json = file.readText()
             if (json.isBlank()) return emptyList()
-            val type = com.google.gson.reflect.TypeToken
+            val type = TypeToken
                 .getParameterized(MutableList::class.java, Category::class.java)
                 .type
             val parsed: List<Category> = gson.fromJson(json, type) ?: emptyList()
@@ -649,7 +653,7 @@ class HomeViewModel @Inject constructor(
                 logoCachePrefs.edit().remove("urls").apply()
                 return
             }
-            val map = org.json.JSONObject(json)
+            val map = JSONObject(json)
             val keys = map.keys()
             synchronized(logoCacheLock) {
                 while (keys.hasNext()) {
@@ -664,9 +668,9 @@ class HomeViewModel @Inject constructor(
                     logoCacheRevision += 1L
                 }
             }
-            System.err.println("HomeVM: restored ${logoCache.size} logo URLs from disk cache")
+            Log.d("HomeVM", "restored ${logoCache.size} logo URLs from disk cache")
         } catch (e: Throwable) {
-            System.err.println("HomeVM: failed to restore logo cache: ${e.message}")
+            Log.e("HomeVM", "failed to restore logo cache: ${e.message}")
             runCatching { logoCachePrefs.edit().remove("urls").apply() }
         }
     }
@@ -678,10 +682,10 @@ class HomeViewModel @Inject constructor(
             delay(2_000L) // debounce: wait 2s after last change before writing
             try {
                 val snapshot = synchronized(logoCacheLock) { LinkedHashMap(logoCache) }
-                val json = org.json.JSONObject(snapshot as Map<*, *>).toString()
+                val json = JSONObject(snapshot as Map<*, *>).toString()
                 logoCachePrefs.edit().putString("urls", json).apply()
             } catch (e: Exception) {
-                System.err.println("HomeVM: failed to save logo cache: ${e.message}")
+            Log.e("HomeVM", "failed to save logo cache: ${e.message}")
             }
         }
     }
@@ -860,7 +864,7 @@ class HomeViewModel @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
-                System.err.println("HomeVM: preload CW cache failed: ${e.message}")
+            Log.e("HomeVM", "preload CW cache failed: ${e.message}")
             }
         }
         scheduleInitialHomeLoad()
@@ -872,7 +876,7 @@ class HomeViewModel @Inject constructor(
                 traktRepository.isAuthenticated.filter { it }.first()
                 launchContinueWatchingFetch()
             } catch (e: Exception) {
-                System.err.println("HomeVM: auth observer CW refresh failed: ${e.message}")
+                Log.e("HomeVM", "auth observer CW refresh failed: ${e.message}")
             }
         }
         viewModelScope.launch {
@@ -2578,7 +2582,7 @@ class HomeViewModel @Inject constructor(
                 )
                 lastWatchedBadgesRefreshMs = SystemClock.elapsedRealtime()
             } catch (e: Exception) {
-                System.err.println("HomeVM: refreshWatchedBadges failed: ${e.message}")
+                Log.e("HomeVM", "refreshWatchedBadges failed: ${e.message}")
             }
         }
     }

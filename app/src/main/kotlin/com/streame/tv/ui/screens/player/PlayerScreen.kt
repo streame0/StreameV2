@@ -443,8 +443,8 @@ fun PlayerScreen(
     val baseRequestHeaders = remember {
         mapOf(
             "Accept" to "*/*",
-            "Accept-Encoding" to "identity",
-            "Connection" to "keep-alive"
+            "Referer" to "https://app.strem.io/",
+            "Origin" to "https://app.strem.io"
         )
     }
     val playbackCookieJar = remember { PlaybackCookieJar() }
@@ -459,12 +459,17 @@ fun PlayerScreen(
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(180, TimeUnit.SECONDS)
             .writeTimeout(20, TimeUnit.SECONDS)
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1)) // Force HTTP/1.1 to avoid HTTP/2 range request issues with some debrid CDNs
             .build()
     }
     val httpDataSourceFactory = remember(playbackHttpClient) {
+        // We avoid calling .setUserAgent() here because OkHttpDataSource appends it,
+        // which can lead to duplicate User-Agent headers if the addon also provides one.
+        // Instead, we include the default UA in our base headers, which are merged carefully.
         val okHttpFactory = OkHttpDataSource.Factory(playbackHttpClient)
-            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .setDefaultRequestProperties(baseRequestHeaders)
+            .setDefaultRequestProperties(
+                mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36") + baseRequestHeaders
+            )
 
         YoutubeChunkedDataSourceFactory(okHttpFactory)
     }
@@ -616,6 +621,20 @@ fun PlayerScreen(
                         // during seek or normal playback should attempt recovery by re-preparing
                         // at the current position instead of failing over to another source.
                         if (hasPlaybackStarted) {
+                            // Check specifically for authentication or expiration errors (401, 403, 404, 410).
+                            // These indicate that the temporary stream URL has expired mid-playback.
+                            val isAuthOrExpiredError = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+                                    ((error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode in listOf(401, 403, 404, 410))
+
+                            if (isAuthOrExpiredError && midPlaybackRecoveryAttempts < 2) {
+                                midPlaybackRecoveryAttempts++
+                                android.util.Log.i("PlayerScreen", "Mid-playback expiry detected (HTTP ${ (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode }) - refreshing stream URL")
+                                latestUiState.selectedStream?.let { 
+                                    viewModel.selectStream(it, currentPosition, selectionIntent = com.streame.tv.ui.screens.player.SelectionIntent.SAME_SOURCE_RETRY) 
+                                }
+                                return
+                            }
+
                             val isTransientError =
                                 error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
                                 error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
@@ -1086,22 +1105,55 @@ fun PlayerScreen(
 
             // Match frame rate before touching playback so any display mode switch
             // happens up-front instead of mid-playback.
+            // Extract stream-specific headers once, used both for frame-rate detection and ExoPlayer.
+            val streamHeaders = uiState.selectedStream
+                ?.behaviorHints
+                ?.proxyHeaders
+                ?.request
+                .orEmpty()
+                .filterKeys { it.isNotBlank() }
+
+            // Build merged headers; stream headers override base (right-side wins in map +).
+            // Bug fix: setDefaultRequestProperties REPLACES all properties set at factory
+            // creation time, so we must re-add User-Agent here — otherwise it is silently
+            // dropped after the first stream switch and many servers return 403.
+            val defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            val mergedHeaders = (baseRequestHeaders + streamHeaders).toMutableMap()
+            if (mergedHeaders.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                mergedHeaders["User-Agent"] = defaultUserAgent
+            }
+            // Bug fix: if the stream supplies its own Referer (e.g. hdhub4u.sbs), derive
+            // Origin from it instead of keeping the hardcoded stremio Origin. Sending the
+            // wrong Origin to a CORS-strict CDN causes an immediate 403.
+            val streamReferer = streamHeaders.entries
+                .firstOrNull { it.key.equals("Referer", ignoreCase = true) }?.value
+            if (!streamReferer.isNullOrBlank()) {
+                runCatching {
+                    val parsed = java.net.URI(streamReferer.trim())
+                    val scheme = parsed.scheme?.lowercase() ?: ""
+                    val host = parsed.host ?: ""
+                    val port = parsed.port
+                    val defaultPort = if (scheme == "https") 443 else 80
+                    if (host.isNotBlank()) {
+                        mergedHeaders["Origin"] = if (port > 0 && port != defaultPort) {
+                            "$scheme://$host:$port"
+                        } else {
+                            "$scheme://$host"
+                        }
+                    }
+                }
+            }
+
             frameRateActivity?.let { activity ->
                 val mode = uiState.frameRateMatchingMode
                 if (mode == "Off" || mode.isBlank()) {
                     com.streame.tv.util.FrameRateUtils.restoreOriginalMode(activity)
                 } else {
-                    val streamHeaders = uiState.selectedStream
-                        ?.behaviorHints
-                        ?.proxyHeaders
-                        ?.request
-                        .orEmpty()
-                        .filterKeys { it.isNotBlank() }
                     val detection = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         kotlinx.coroutines.withTimeoutOrNull(2000L) {
                             com.streame.tv.util.FrameRateUtils.detectFrameRateCached(
                                 sourceUrl = url,
-                                headers = baseRequestHeaders + streamHeaders
+                                headers = mergedHeaders
                             )
                         }
                     }
@@ -1123,16 +1175,9 @@ fun PlayerScreen(
                 blackVideoRecoveryStage = 0
                 blackVideoReadySinceMs = null
             }
-            val streamHeaders = uiState.selectedStream
-                ?.behaviorHints
-                ?.proxyHeaders
-                ?.request
-                .orEmpty()
-                .filterKeys { it.isNotBlank() }
-            httpDataSourceFactory.setDefaultRequestProperties(baseRequestHeaders + streamHeaders)
 
-            // Track when stream was selected
-            // (Moved up before frame rate probe)
+            // Apply the corrected merged headers to ExoPlayer's data source factory.
+            httpDataSourceFactory.setDefaultRequestProperties(mergedHeaders)
 
             // Only add the selected subtitle to ExoPlayer (not all 30+).
             // Loading all external subs slows down preparation and causes non-UTF8 subs to fail.
