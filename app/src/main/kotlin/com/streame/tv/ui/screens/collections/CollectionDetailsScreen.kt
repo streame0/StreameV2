@@ -82,10 +82,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.Immutable
 import javax.inject.Inject
 
 enum class CollectionTab { MOVIES, SERIES }
 
+@Immutable
 data class CollectionDetailsUiState(
     val catalog: CatalogConfig? = null,
     val movieItems: List<MediaItem> = emptyList(),

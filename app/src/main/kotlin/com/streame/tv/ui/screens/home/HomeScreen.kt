@@ -2101,6 +2101,43 @@ private fun HomeInputLayer(
             )
         }
 
+        val onPlayUpdated by rememberUpdatedState(onPlay)
+        val onDetailsUpdated by rememberUpdatedState(onDetails)
+        val onNavigateToDetailsUpdated by rememberUpdatedState(onNavigateToDetails)
+        val onNavigateToCollectionUpdated by rememberUpdatedState(onNavigateToCollection)
+        val onNavigateToPlayerUpdated by rememberUpdatedState(onNavigateToPlayer)
+        val onOpenContextMenuUpdated by rememberUpdatedState(onOpenContextMenu)
+
+        val onItemClickStabilized = remember(onNavigateToCollectionUpdated, onNavigateToPlayerUpdated, onNavigateToDetailsUpdated) {
+            { item: MediaItem ->
+                if (isActionableHomeItem(item)) {
+                    val collectionId = item.status?.removePrefix("collection:")
+                        ?.takeIf { item.status?.startsWith("collection:") == true && it.isNotBlank() }
+                    if (collectionId != null) {
+                        onNavigateToCollectionUpdated(collectionId)
+                    } else if (item.progress > 0 && (item.lastAddonId != null || item.lastSourceName != null)) {
+                        // Continue Watching with saved source → go directly to player
+                        onNavigateToPlayerUpdated(
+                            item.mediaType, item.id,
+                            item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber,
+                            null, // imdbId - player will resolve
+                            null, // streamUrl - player will resolve
+                            item.lastAddonId, item.lastSourceName, item.lastBingeGroup,
+                            null, // startPositionMs - PlayerViewModel.resolveResumeData handles it
+                            null
+                        )
+                    } else {
+                        onNavigateToDetailsUpdated(
+                            item.mediaType,
+                            item.id,
+                            item.nextEpisode?.seasonNumber,
+                            item.nextEpisode?.episodeNumber
+                        )
+                    }
+                }
+            }
+        }
+
         HomeRowsLayer(
             categories = categories,
             cardLogoUrls = cardLogoUrls,
@@ -2113,32 +2150,11 @@ private fun HomeInputLayer(
             onItemFocusedPrefetch = onItemFocusedPrefetch,
             heroItem = heroItem,
             heroOverviewOverride = heroOverviewOverride,
-            onPlay = onPlay,
-            onDetails = onDetails,
-            onNavigateToDetails = onNavigateToDetails,
-            onItemClick = { item ->
-                if (!isActionableHomeItem(item)) {
-                    return@HomeRowsLayer
-                }
-                val collectionId = item.status?.removePrefix("collection:")?.takeIf { item.status?.startsWith("collection:") == true && it.isNotBlank() }
-                if (collectionId != null) {
-                    onNavigateToCollection(collectionId)
-                } else if (item.progress > 0 && (item.lastAddonId != null || item.lastSourceName != null)) {
-                    // Continue Watching with saved source → go directly to player
-                    onNavigateToPlayer(
-                        item.mediaType, item.id,
-                        item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber,
-                        null, // imdbId - player will resolve
-                        null, // streamUrl - player will resolve
-                        item.lastAddonId, item.lastSourceName, item.lastBingeGroup,
-                        null, // startPositionMs - PlayerViewModel.resolveResumeData handles it
-                        null
-                    )
-                } else {
-                    onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)
-                }
-            },
-            onItemLongClick = if (isMobile) { item, isContinue -> onOpenContextMenu(item, isContinue) } else null
+            onPlay = { onPlayUpdated() },
+            onDetails = { onDetailsUpdated() },
+            onNavigateToDetails = { mt, id, sn, en -> onNavigateToDetailsUpdated(mt, id, sn, en) },
+            onItemClick = onItemClickStabilized,
+            onItemLongClick = if (isMobile) { item, isContinue -> onOpenContextMenuUpdated(item, isContinue) } else null
         )
     }
 }
@@ -2799,6 +2815,9 @@ private fun ContentRow(
         lastScrollOffset = extraOffset
     }
 
+    val onItemClickUpdated by rememberUpdatedState(onItemClick)
+    val onItemFocusedUpdated by rememberUpdatedState(onItemFocused)
+
     Column(
         modifier = Modifier
             .padding(bottom = 12.dp)
@@ -2893,8 +2912,8 @@ private fun ContentRow(
                             enableFocusedImageSwap = !isCollectionRow && !isFastScrolling,
                             animateFocus = false,
                             enableSystemFocus = false,
-                            onFocused = { onItemFocused(item, index) },
-                            onClick = { onItemClick(item) },
+                            onFocused = { onItemFocusedUpdated(item, index) },
+                            onClick = { onItemClickUpdated(item) },
                         )
 
                         TopRankRibbon(
@@ -2924,8 +2943,8 @@ private fun ContentRow(
                         enableFocusedImageSwap = !isCollectionRow && !isFastScrolling,
                         animateFocus = false,
                         enableSystemFocus = false,
-                        onFocused = { onItemFocused(item, index) },
-                        onClick = { onItemClick(item) },
+                        onFocused = { onItemFocusedUpdated(item, index) },
+                        onClick = { onItemClickUpdated(item) },
                     )
                 }
             }

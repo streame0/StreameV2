@@ -1,5 +1,6 @@
 ﻿package com.streame.tv.ui.screens.login
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.repository.AuthRepository
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+@Immutable
 data class LoginUiState(
     val isLoading: Boolean = false,
     val error: String? = null,

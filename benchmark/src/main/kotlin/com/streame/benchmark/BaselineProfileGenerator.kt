@@ -28,18 +28,43 @@ class BaselineProfileGenerator {
 
             // Let home compose and initial rows settle.
             device.waitForIdle(1_000)
-            if (device.wait(Until.hasObject(By.textContains("watching")), 1_200)) {
-                device.pressDPadCenter()
-                device.waitForIdle(1_000)
-            }
-            repeat(3) {
+            
+            // 1. Explore Home Rows deeper to trigger catalog loading and focus stabilization
+            repeat(8) {
                 device.pressDPadDown()
-                device.waitForIdle(250)
+                device.waitForIdle(200)
             }
-            repeat(3) {
-                device.pressDPadUp()
-                device.waitForIdle(250)
+            repeat(4) {
+                device.pressDPadRight()
+                device.waitForIdle(200)
             }
+            repeat(4) {
+                device.pressDPadLeft()
+                device.waitForIdle(200)
+            }
+
+            // 2. Sidebar navigation
+            repeat(5) { device.pressDPadLeft() } // Ensure sidebar focus
+            device.waitForIdle(500)
+            device.pressDPadDown()
+            device.waitForIdle(100)
+            device.pressDPadUp()
+            device.waitForIdle(100)
+            device.pressDPadRight() // Return to content
+            device.waitForIdle(500)
+
+            // 3. Long press for context menu (if a card is focused)
+            val focusedObject = device.findObject(By.focused(true))
+            focusedObject?.longClick()
+            device.waitForIdle(1000)
+            device.pressBack() // Close context menu
+            device.waitForIdle(500)
+
+            // 4. Enter Detail Screen and return
+            device.pressDPadCenter()
+            device.waitForIdle(2_000)
+            device.pressBack()
+            device.waitForIdle(1_000)
 
             // Mobile scroll simulation
             val scrollable = device.findObject(By.scrollable(true))

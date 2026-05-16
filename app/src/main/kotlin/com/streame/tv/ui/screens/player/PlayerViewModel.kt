@@ -2,6 +2,7 @@ package com.streame.tv.ui.screens.player
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+@Immutable
 enum class SelectionIntent {
     USER_SELECTED,
     INITIAL_AUTO_PICK,
@@ -48,6 +50,7 @@ enum class SelectionIntent {
     NEXT_EPISODE
 }
 
+@Immutable
 data class PlayerUiState(
     val isLoading: Boolean = true,
     val isLoadingStreams: Boolean = false,

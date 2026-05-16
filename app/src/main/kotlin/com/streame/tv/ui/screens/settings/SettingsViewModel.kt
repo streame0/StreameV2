@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import coil3.SingletonImageLoader
 import coil3.request.CachePolicy
+import androidx.compose.runtime.Immutable
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -71,6 +72,7 @@ enum class ToastType {
     SUCCESS, ERROR, INFO
 }
 
+@Immutable
 data class SettingsUiState(
     val defaultSubtitle: String = "Off",
     val subtitleOptions: List<String> = emptyList(),

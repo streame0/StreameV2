@@ -13,6 +13,7 @@ import coil3.ImageLoader
 import coil3.imageLoader
 import coil3.request.*
 import coil3.size.Precision
+import androidx.compose.runtime.Immutable
 import com.streame.tv.data.model.Category
 import com.streame.tv.data.model.CatalogConfig
 import com.streame.tv.data.model.CatalogKind
@@ -67,6 +68,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
+@Immutable
 data class HomeUiState(
     val isLoading: Boolean = false,
     val isInitialLoad: Boolean = true,
@@ -94,6 +96,7 @@ data class HomeUiState(
     val toastType: ToastType = ToastType.INFO
 )
 
+@Immutable
 data class HomeCollectionRow(
     val id: String,
     val title: String,

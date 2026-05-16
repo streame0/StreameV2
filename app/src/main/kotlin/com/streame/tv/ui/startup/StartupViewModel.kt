@@ -1,6 +1,7 @@
 package com.streame.tv.ui.startup
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.ImageLoader
@@ -24,6 +25,7 @@ import javax.inject.Inject
  * StartupViewModel - Handles parallel loading during splash screen
  * Pre-loads all data needed for instant home screen display
  */
+@Immutable
 data class StartupState(
     val isLoading: Boolean = true,
     val isReady: Boolean = false,

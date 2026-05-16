@@ -1,5 +1,6 @@
 package com.streame.tv.ui.screens.search
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.model.MediaItem
@@ -24,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
+@Immutable
 data class Genre(val id: Int, val name: String)
 
 val MOVIE_GENRES = listOf(
@@ -55,6 +57,7 @@ val ANIME_GENRES = listOf(
     Genre(10749, "Romance"), Genre(878, "Sci-Fi"), Genre(9648, "Mystery")
 )
 
+@Immutable
 data class Country(val code: String, val name: String)
 val COUNTRIES = listOf(
     Country("en", "English"), Country("ja", "Japanese"), Country("ko", "Korean"),
@@ -64,13 +67,16 @@ val COUNTRIES = listOf(
     Country("th", "Thai"), Country("nl", "Dutch"), Country("ru", "Russian")
 )
 
+@Immutable
 enum class DiscoverType(val label: String) { ALL("All"), MOVIES("Movies"), TV_SHOWS("TV Shows"), ANIME("Anime") }
+@Immutable
 enum class SortOption(val label: String, val apiValue: String) { POPULAR("Popular", "popularity.desc"), TOP_RATED("Top Rated", "vote_average.desc"), NEWEST("Newest", "primary_release_date.desc") }
 
 // Memoized empty collections to reduce GC pressure
 private val EMPTY_MEDIA_ITEMS: List<MediaItem> = emptyList()
 private val EMPTY_LOGO_URLS: Map<String, String> = emptyMap()
 
+@Immutable
 data class SearchUiState(
     val query: String = "",
     val isLoading: Boolean = false,

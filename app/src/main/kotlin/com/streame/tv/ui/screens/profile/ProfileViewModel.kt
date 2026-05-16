@@ -1,5 +1,6 @@
 ﻿package com.streame.tv.ui.screens.profile
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.model.Profile
@@ -22,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
+@Immutable
 data class ProfileUiState(
     val profiles: List<Profile> = emptyList(),
     val activeProfile: Profile? = null,

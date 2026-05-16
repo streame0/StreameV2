@@ -2,6 +2,7 @@ package com.streame.tv.ui.screens.details
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.model.CastMember
@@ -35,6 +36,7 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import javax.inject.Inject
 
+@Immutable
 data class DetailsUiState(
     val isLoading: Boolean = true,
     val item: MediaItem? = null,
@@ -95,6 +97,7 @@ data class DetailsUiState(
     val collectionPosterPath: String? = null
 )
 
+@Immutable
 data class StreamingServiceUi(
     val name: String,
     val logoUrl: String? = null
@@ -163,6 +166,7 @@ private fun formatBudget(budget: Long): String {
     }
 }
 
+@Immutable
 enum class ToastType {
     SUCCESS, ERROR, INFO
 }

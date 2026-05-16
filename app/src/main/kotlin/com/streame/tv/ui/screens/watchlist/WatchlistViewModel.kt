@@ -1,5 +1,6 @@
 package com.streame.tv.ui.screens.watchlist
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streame.tv.data.model.MediaItem
@@ -20,6 +21,7 @@ enum class ToastType {
     SUCCESS, ERROR, INFO
 }
 
+@Immutable
 data class WatchlistUiState(
     val isLoading: Boolean = true,
     val items: List<MediaItem> = emptyList(),
